@@ -4,6 +4,7 @@
 #include <xen/errno.h>
 #include <xen/init.h>
 #include <xen/param.h>
+#include <xen/percpu.h>
 #include <xen/sections.h>
 #include <xen/types.h>
 
@@ -15,6 +16,11 @@ cpumask_t __ro_after_init cpu_possible_map;
 /* maxcpus: maximum number of CPUs to activate. */
 static unsigned int __initdata max_cpus;
 integer_param("maxcpus", max_cpus);
+
+/* Representing the hart siblings (hardware threads) within each logcal core */
+DEFINE_PER_CPU_READ_MOSTLY(cpumask_var_t, cpu_sibling_mask);
+/* Representing all harts sharing the same physical core */
+DEFINE_PER_CPU_READ_MOSTLY(cpumask_var_t, cpu_core_mask);
 
 void __init smp_prepare_boot_cpu(void)
 {
@@ -157,4 +163,27 @@ void __init smp_init_cpus(void)
     nr_cpu_ids = cpuid;
 
     printk(XENLOG_INFO "SMP: Allowing %u CPUs\n", nr_cpu_ids);
+}
+
+static int setup_cpu_sibling_map(unsigned int cpu)
+{
+    if ( !zalloc_cpumask_var(&per_cpu(cpu_sibling_mask, cpu)) ||
+         !zalloc_cpumask_var(&per_cpu(cpu_core_mask, cpu)) )
+        return -ENOMEM;
+
+    cpumask_set_cpu(cpu, per_cpu(cpu_sibling_mask, cpu));
+    cpumask_set_cpu(cpu, per_cpu(cpu_core_mask, cpu));
+
+    return 0;
+}
+
+void __init smp_prepare_cpus(void)
+{
+    int rc;
+
+    cpumask_copy(&cpu_present_map, &cpu_possible_map);
+
+    rc = setup_cpu_sibling_map(0);
+    if ( rc )
+        panic("Unable to allocate CPU sibling/core maps\n");
 }

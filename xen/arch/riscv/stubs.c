@@ -11,12 +11,6 @@
 
 /* smpboot.c */
 
-/* XXX these seem awfully x86ish... */
-/* representing HT siblings of each logical CPU */
-DEFINE_PER_CPU_READ_MOSTLY(cpumask_var_t, cpu_sibling_mask);
-/* representing HT and core siblings of each logical CPU */
-DEFINE_PER_CPU_READ_MOSTLY(cpumask_var_t, cpu_core_mask);
-
 nodemask_t __read_mostly node_online_map = { { [0] = 1UL } };
 
 /* time.c */
