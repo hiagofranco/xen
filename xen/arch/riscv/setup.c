@@ -215,6 +215,8 @@ void __init noreturn start_xen(unsigned long bootcpu_id,
     scheduler_init();
     set_current(idle_vcpu[0]);
 
+    smp_prepare_cpus();
+
     do_initcalls();
 
     if ( !is_dom0less_mode() )
