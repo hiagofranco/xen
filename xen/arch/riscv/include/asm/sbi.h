@@ -158,6 +158,37 @@ int sbi_remote_hfence_gvma_vmid(const cpumask_t *cpu_mask, vaddr_t start,
 int sbi_hsm_hart_stop(void);
 
 /*
+ * Request the SBI implementation to start executing the target hart in
+ * supervisor-mode, at the address specified by start_addr, with the specific
+ * register values described in Table "HSM Hart Start Register State":
+ *   Register Name  Register Value
+ *     satp            0
+ *     sstatus.SIE     0
+ *     a0              hartid
+ *     a1              opaque parameter
+ *     All other registers remain in an undefined state.
+ * A single unsigned long parameter is sufficient as start_addr, because the
+ * hart will start execution in supervisor-mode with the MMU off, hence
+ * start_addr must be less than XLEN bits wide.
+ *
+ * This call is asynchronous — more specifically, the sbi_hart_start() may
+ * return before the target hart starts executing as long as the SBI
+ * implementation is capable of ensuring the return code is accurate. If the
+ * SBI implementation is a platform runtime firmware executing in machine-mode
+ * (M-mode), then it MUST configure any physical memory protection it supports,
+ * such as that defined by PMP, and other M-mode state, before transferring
+ * control to supervisor-mode software.
+ *
+ * @hartid parameter specifies the target hart which is to be started.
+ * @tart_addr parameter points to a runtime-specified physical address, where
+ *            the hart can start executing in supervisor-mode.
+ * @opaque parameter is an XLEN-bit value which will be set in the a1 register
+ *         when the hart starts executing at start_addr.
+ */
+int sbi_hsm_hart_start(unsigned long hartid, unsigned long saddr,
+                       unsigned long opaque);
+
+/*
  * Initialize SBI library
  *
  * @return 0 on success, otherwise negative errno on failure

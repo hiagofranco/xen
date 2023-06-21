@@ -322,6 +322,17 @@ int sbi_remote_hfence_gvma_vmid(const cpumask_t *cpu_mask, vaddr_t start,
                       cpu_mask, start, size, vmid, 0);
 }
 
+int sbi_hsm_hart_start(unsigned long hartid, unsigned long saddr,
+                       unsigned long priv)
+{
+    struct sbiret ret;
+
+    ret = sbi_ecall(SBI_EXT_HSM, SBI_EXT_HSM_HART_START, hartid, saddr, priv,
+                    0, 0, 0);
+
+    return sbi_err_map_xen_errno(ret.error);
+}
+
 int sbi_hsm_hart_stop(void)
 {
     struct sbiret ret;
@@ -395,6 +406,9 @@ int __init sbi_init(void)
             set_xen_timer = sbi_set_timer_v02;
         else
             set_xen_timer = sbi_set_timer_v01;
+
+        if ( sbi_probe_extension(SBI_EXT_HSM) > 0 )
+            dprintk(XENLOG_INFO, "SBI v0.2 HSM extenstion detected\n");
     }
     else
         panic("Ooops. SBI spec version 0.1 detected. Need to add support");
