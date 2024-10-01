@@ -168,10 +168,237 @@ static void dump_csrs(const char *ctx)
 #undef X
 }
 
+static void show_registers(const struct cpu_user_regs *regs)
+{
+    printk("sepc: %016lx", regs->sepc);
+    if ( !(regs->hstatus & HSTATUS_SPV) )
+        printk(" %pS", _p(regs->sepc));
+    printk("\nsstatus: %016lx hstatus: %016lx\n", regs->sstatus, regs->hstatus);
+
+    dump_general_regs(regs);
+}
+
+/* Return the top of the Xen stack regs->sp points into. */
+static unsigned long stack_top(const struct cpu_user_regs *regs)
+{
+    const struct cpu_info *info = get_cpu_info();
+    unsigned long sp = regs->sp, top = (unsigned long)info;
+
+    /*
+     * A vCPU's stack isn't aligned to STACK_SIZE, so its bounds have to be
+     * derived from struct cpu_info, which occupies the top of it (see
+     * arch_vcpu_create()):
+     *
+     *   stack = vzalloc(STACK_SIZE);
+     *   info = stack + STACK_SIZE - sizeof(*info);
+     *
+     * (largest address)
+     * stack + STACK_SIZE -> +-----------------+ = info + 1
+     *                       | struct cpu_info |
+     *               info -> +-----------------+ = top, sp of an empty stack
+     *                       | used stack      |
+     *                       | [...]           |
+     *                       | free space      |
+     *              stack -> +-----------------+ = (info + 1) - STACK_SIZE
+     * (smallest address)
+     */
+    if ( info && sp <= top && sp > (unsigned long)(info + 1) - STACK_SIZE )
+        return top;
+
+    /*
+     * Otherwise it is one of the boot stacks, used until vCPU's stack is
+     * switched to. They are aligned to STACK_SIZE.
+     */
+    return ROUNDUP(sp, STACK_SIZE);
+}
+
+#ifdef CONFIG_FRAME_POINTER
+
+/*
+ * On entry a function saves ra and the frame pointer (s0) of its caller in a
+ * frame record at the very top of its frame, and then makes s0 hold the value
+ * sp had on entry. Hence the frame pointer of a function is the address right
+ * above its frame, its frame record is found right below that address, and
+ * the saved frame pointers chain the frame records up to the top of the stack:
+ *
+ * (largest address)
+ * | [...]                  |
+ * +------------------------+ <- fp of the caller <-,
+ * | ra of the caller       |                       |
+ * | fp of its caller       | -> [...]              |
+ * | [...]                  |                       |
+ * +------------------------+ <- fp                 |
+ * | ra                     |    fp - 8             |
+ * | fp of the caller       |    fp - 16 -----------'
+ * | [...]                  |
+ * +------------------------+ <- sp
+ * (smallest address)
+ *
+ * There are GCC versions which don't save ra in a leaf function, in which case
+ * the only member of its frame record is fp, stored where ra would otherwise
+ * be.
+ */
+struct stackframe {
+    unsigned long fp;
+    unsigned long ra;
+};
+
+/*
+ * Print the call trace of the context @regs were saved for. The interrupted
+ * function is identified by sepc, which isn't on the stack, and its callers
+ * are found by walking the frame records, starting from the one regs->s0
+ * points to. @high is the top of the stack regs->sp points into.
+ */
+static void show_trace(const struct cpu_user_regs *regs, unsigned long high)
+{
+    unsigned long fp = regs->s0, low = regs->sp;
+    /* Set for the frame of the function @regs were saved in. */
+    bool first = true;
+
+    printk("Xen call trace:\n");
+    printk("   [<%p>] %pS (PC)\n", _p(regs->sepc), _p(regs->sepc));
+    printk("   [<%p>] %pS (RA)\n", _p(regs->ra), _p(regs->ra));
+
+    /*
+     * Nothing read from the stack can be trusted, so fp is checked before
+     * every use. As the frame record is read from right below fp, fp has to
+     * be above low by at least the size of the record. The sum is done on
+     * low, as subtracting from a bogus fp may wrap.
+     */
+    while ( IS_ALIGNED(fp, sizeof(fp)) && fp <= high &&
+            fp >= low + sizeof(struct stackframe) )
+    {
+        /* fp points right above the frame record, not at it. */
+        const struct stackframe *frame = (const struct stackframe *)fp - 1;
+        unsigned long addr = frame->ra, next = frame->fp;
+
+        if ( first && addr > fp && addr <= high )
+            /*
+             * A stack address in place of ra means the interrupted function
+             * is a leaf one which hasn't saved ra: what is found there is the
+             * frame pointer of its caller. The return address is still in ra
+             * and has been printed already.
+             */
+            next = addr;
+        else
+            printk("   [<%p>] %pS\n", _p(addr), _p(addr));
+
+        /*
+         * Finding the return address of do_trap() means fp is the frame
+         * pointer of do_trap(), i.e. the value sp had when handle_trap()
+         * called it. At that point sp holds the address of the struct
+         * cpu_user_regs handle_trap() has filled, so fp is the address of
+         * that structure.
+         *
+         * For a trap taken in Xen the structure is below the top of the
+         * stack. For a trap taken from a guest it is in struct cpu_info,
+         * i.e. fp is equal to high: it holds guest registers, which a trace
+         * of Xen must not be continued from. The guest's s0 saved by
+         * do_trap() then doesn't pass the checks of the loop either, ending
+         * the trace.
+         */
+        if ( addr == (unsigned long)ret_from_do_trap &&
+             fp + sizeof(*regs) <= high )
+        {
+            /*
+             * do_trap() interrupted Xen: its frame is followed by the
+             * registers saved by handle_trap(), which is where the trace of
+             * the interrupted context has to be started from.
+             */
+            regs = _p(fp);
+
+            printk("   [<%p>] %pS (PC)\n", _p(regs->sepc), _p(regs->sepc));
+            printk("   [<%p>] %pS (RA)\n", _p(regs->ra), _p(regs->ra));
+
+            low = fp + sizeof(*regs);
+            fp = regs->s0;
+            first = true;
+
+            continue;
+        }
+
+        /*
+         * Frames are expected to be found at strictly increasing addresses,
+         * which also guarantees the walk to terminate on a corrupted stack.
+         */
+        low = fp;
+        fp = next;
+        first = false;
+    }
+
+    printk("\n");
+}
+
+#else /* !CONFIG_FRAME_POINTER */
+
+/*
+ * Without frame pointers the best which can be done is to print everything
+ * found on the stack which looks like a pointer into Xen's text.
+ */
+static void show_trace(const struct cpu_user_regs *regs, unsigned long high)
+{
+    const unsigned long *stack = _p(regs->sp);
+
+    printk("Enable CONFIG_FRAME_POINTER for precise stack frame\n");
+
+    printk("Xen call trace:\n");
+    printk("   [<%p>] %pS (PC)\n", _p(regs->sepc), _p(regs->sepc));
+    printk("   [<%p>] %pS (RA)\n", _p(regs->ra), _p(regs->ra));
+
+    for ( ; (unsigned long)stack < high; stack++ )
+        if ( is_active_kernel_text(*stack) )
+            printk("   [<%p>] %pS\n", _p(*stack), _p(*stack));
+
+    printk("\n");
+}
+
+#endif /* CONFIG_FRAME_POINTER */
+
+#define STACK_DUMP_LINES     20
+#define STACK_WORDS_PER_LINE 4
+
+static void show_stack(const struct cpu_user_regs *regs)
+{
+    const unsigned long *stack = _p(regs->sp);
+    unsigned long top;
+    unsigned int i;
+
+    /* Guest's sp and s0 have nothing to do with Xen's stack. */
+    if ( regs->hstatus & HSTATUS_SPV )
+        return;
+
+    if ( !IS_ALIGNED(regs->sp, sizeof(*stack)) )
+    {
+        printk("No stack trace: sp=%p is misaligned\n", stack);
+        return;
+    }
+
+    top = stack_top(regs);
+
+    printk("Xen stack trace from sp=%p:\n  ", stack);
+
+    for ( i = 0; i < STACK_DUMP_LINES * STACK_WORDS_PER_LINE; i++ )
+    {
+        if ( (unsigned long)stack >= top )
+            break;
+
+        if ( i && !(i % STACK_WORDS_PER_LINE) )
+            printk("\n  ");
+
+        printk(" %p", _p(*stack++));
+    }
+
+    if ( !i )
+        printk("Stack empty.");
+    printk("\n");
+
+    show_trace(regs, top);
+}
+
 static void do_unexpected_trap(const struct cpu_user_regs *regs)
 {
     dump_csrs("Unhandled exception");
-    dump_general_regs(regs);
+    show_execution_state(regs);
 
     die();
 }
@@ -341,7 +568,8 @@ void vcpu_show_execution_state(struct vcpu *v)
 
 void show_execution_state(const struct cpu_user_regs *regs)
 {
-    printk("TODO: Implement show_execution_state(regs)\n");
+    show_registers(regs);
+    show_stack(regs);
 }
 
 void arch_hypercall_tasklet_result(struct vcpu *v, long res)

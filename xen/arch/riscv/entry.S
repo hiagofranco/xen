@@ -86,6 +86,11 @@ FUNC(handle_trap)
         mv      a0, sp
         call    do_trap
 
+        /*
+         * do_trap()'s return address. A stack trace uses it to recognise
+         * that the frame of do_trap() is followed by a struct cpu_user_regs.
+         */
+LABEL(ret_from_do_trap, 0)
         REG_L   t0, CPU_USER_REGS_HSTATUS(sp)
         andi    t0, t0, HSTATUS_SPV
 

@@ -15,6 +15,7 @@ struct trap_info {
 
 void do_trap(struct cpu_user_regs *cpu_regs);
 void handle_trap(void);
+void ret_from_do_trap(void);
 void trap_init(void);
 
 /* Reflect @trap back to the guest, i.e. enter its VS-mode trap handler. */
