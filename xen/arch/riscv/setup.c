@@ -7,6 +7,7 @@
 #include <xen/console.h>
 #include <xen/device_tree.h>
 #include <xen/domain.h>
+#include <xen/dom0less-build.h>
 #include <xen/init.h>
 #include <xen/irq.h>
 #include <xen/mm.h>
@@ -15,6 +16,7 @@
 #include <xen/serial.h>
 #include <xen/shutdown.h>
 #include <xen/smp.h>
+#include <xen/static-evtchn.h>
 #include <xen/tasklet.h>
 #include <xen/timer.h>
 #include <xen/vmap.h>
@@ -179,6 +181,17 @@ void __init noreturn start_xen(unsigned long bootcpu_id,
     set_current(idle_vcpu[0]);
 
     do_initcalls();
+
+    if ( !is_dom0less_mode() )
+        panic("Only Dom0Less mode is supported now\n");
+    else
+        printk(XENLOG_INFO "Xen dom0less mode detected\n");
+
+    if ( acpi_disabled )
+    {
+        create_domUs();
+        alloc_static_evtchn();
+    }
 
     printk("All set up\n");
 
