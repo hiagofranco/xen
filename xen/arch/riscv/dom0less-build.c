@@ -5,15 +5,27 @@
 #include <xen/fdt-kernel.h>
 #include <xen/init.h>
 #include <xen/libfdt/libfdt.h>
+#include <xen/sched.h>
 
+#include <asm/intc.h>
 #include <asm/p2m.h>
+#include <asm/vsbi-uart.h>
 
 int __init init_vuart(struct domain *d, struct kernel_info *kinfo,
                       const struct dt_device_node *node)
 {
-    /* Nothing to do at the moment */
+    int rc = 0;
 
-    return 0;
+    kinfo->arch.vsbi_uart = dt_property_read_bool(node, "vsbi_uart");
+
+    if ( kinfo->arch.vsbi_uart )
+    {
+        rc = domain_vsbi_uart_init(d, NULL);
+        if ( rc < 0 )
+            return rc;
+    }
+
+    return rc;
 }
 
 int __init init_intc_phandle(struct kernel_info *kinfo, const char *name,
