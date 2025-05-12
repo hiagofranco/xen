@@ -11,6 +11,7 @@
 #include <asm/guest-layout.h>
 #include <asm/mmio.h>
 #include <asm/p2m.h>
+#include <asm/vsbi-uart.h>
 #include <asm/vtimer.h>
 
 struct vcpu_vmid {
@@ -105,6 +106,8 @@ struct arch_domain {
     struct vintc *vintc;
 
     struct vmmio vmmio;
+
+    struct vsbi_uart vsbi_uart;
 };
 
 #include <xen/sched.h>
