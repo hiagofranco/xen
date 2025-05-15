@@ -177,9 +177,8 @@ struct page_info *get_page_from_gfn(struct domain *d, unsigned long gfn,
 
 static inline void memory_type_changed(struct domain *d)
 {
-    BUG_ON("unimplemented");
+    /* Nothing to do */
 }
-
 
 static inline int guest_physmap_mark_populate_on_demand(struct domain *d,
                                                         unsigned long gfn,
