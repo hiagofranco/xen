@@ -197,6 +197,12 @@ void __init noreturn start_xen(unsigned long bootcpu_id,
     else
         printk(XENLOG_INFO "Xen dom0less mode detected\n");
 
+    /*
+     * Flush guest TLB once as it isn't guruanteed by spec. that it will
+     * be empty, so flush guest TLB for all harts.
+     */
+    sbi_remote_hfence_gvma(NULL, 0, 0);
+
     if ( acpi_disabled )
     {
         create_domUs();
