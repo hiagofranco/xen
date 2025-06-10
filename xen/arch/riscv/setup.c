@@ -187,6 +187,11 @@ void __init noreturn start_xen(unsigned long bootcpu_id,
         alloc_static_evtchn();
     }
 
+    console_endboot();
+
+    /* Hide UART from DOM0 if we're using it */
+    serial_endboot();
+
     printk("All set up\n");
 
     machine_halt();
