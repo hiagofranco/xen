@@ -77,6 +77,49 @@ static void * __init relocate_fdt(paddr_t dtb_paddr, size_t dtb_size)
     return fdt;
 }
 
+static void __init remove_early_mappings(void)
+{
+    int rc;
+
+    rc = destroy_xen_mappings(BOOT_FDT_VIRT_START,
+                              BOOT_FDT_VIRT_START + BOOT_FDT_VIRT_SIZE);
+
+    BUG_ON(rc);
+}
+
+void __init discard_initial_modules(void)
+{
+    struct boot_modules *mi = &bootinfo.modules;
+    int i;
+
+    /*
+     * When using static heap feature, don't give bootmodules memory back to
+     * the heap allocator
+     */
+    if ( using_static_heap )
+        goto out;
+
+    for ( i = 0; i < mi->nr_mods; i++ )
+    {
+        paddr_t s = mi->module[i].start;
+        paddr_t e = s + PAGE_ALIGN(mi->module[i].size);
+
+        if ( mi->module[i].kind == BOOTMOD_XEN )
+            continue;
+
+        if ( !mfn_valid(maddr_to_mfn(s)) ||
+             !mfn_valid(maddr_to_mfn(e)) )
+            continue;
+
+        fw_unreserved_regions(s, e, init_domheap_pages, 0);
+    }
+
+    mi->nr_mods = 0;
+
+ out:
+    remove_early_mappings();
+}
+
 void __init noreturn start_xen(unsigned long bootcpu_id,
                                paddr_t dtb_addr)
 {
@@ -186,6 +229,14 @@ void __init noreturn start_xen(unsigned long bootcpu_id,
         create_domUs();
         alloc_static_evtchn();
     }
+
+    /*
+     * This needs to be called **before** heap_init_late() so modules
+     * will be scrubbed (unless suppressed).
+     */
+    discard_initial_modules();
+
+    heap_init_late();
 
     console_endboot();
 
