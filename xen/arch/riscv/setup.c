@@ -93,6 +93,7 @@ void __init noreturn start_xen(unsigned long bootcpu_id,
     const char *cmdline;
     size_t fdt_size;
     int rc;
+    struct domain *d;
 
     remove_identity_mapping();
 
@@ -223,6 +224,11 @@ void __init noreturn start_xen(unsigned long bootcpu_id,
 
     /* Hide UART from DOM0 if we're using it */
     serial_endboot();
+
+    system_state = SYS_STATE_active;
+
+    for_each_domain( d )
+        domain_unpause_by_systemcontroller(d);
 
     printk("All set up\n");
 
