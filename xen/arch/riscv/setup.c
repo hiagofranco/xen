@@ -77,6 +77,16 @@ static void * __init relocate_fdt(paddr_t dtb_paddr, size_t dtb_size)
     return fdt;
 }
 
+static void __init remove_early_mappings(void)
+{
+    int rc;
+
+    rc = destroy_xen_mappings(BOOT_FDT_VIRT_START,
+                              BOOT_FDT_VIRT_START + BOOT_FDT_VIRT_SIZE);
+
+    BUG_ON(rc);
+}
+
 void __init noreturn start_xen(unsigned long bootcpu_id,
                                paddr_t dtb_addr)
 {
@@ -192,6 +202,16 @@ void __init noreturn start_xen(unsigned long bootcpu_id,
         create_domUs();
         alloc_static_evtchn();
     }
+
+    /*
+     * This needs to be called **before** heap_init_late() so modules
+     * will be scrubbed (unless suppressed).
+     */
+    discard_initial_modules();
+
+    remove_early_mappings();
+
+    heap_init_late();
 
     console_endboot();
 
