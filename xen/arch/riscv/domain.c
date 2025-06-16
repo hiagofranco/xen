@@ -643,6 +643,11 @@ void continue_running(struct vcpu *same)
     /* Nothing to do. */
 }
 
+void arch_domain_unpause(struct domain *d)
+{
+    /* Nothing to do */
+}
+
 static void __init __maybe_unused build_assertions(void)
 {
 /*
