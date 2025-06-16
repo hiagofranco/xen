@@ -501,6 +501,11 @@ static bool vcpu_can_access_vsiselect(const struct vcpu *v)
     return v->arch.hstateen0 & SMSTATEEN0_SVSLCT;
 }
 
+void arch_domain_creation_finished(struct domain *d)
+{
+    /* Nothing to do */
+}
+
 static void csrs_ctxt_switch_from(struct vcpu *p)
 {
     /*
