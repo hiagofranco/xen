@@ -328,6 +328,11 @@ int arch_domain_create(struct domain *d,
     return rc;
 }
 
+void arch_domain_creation_finished(struct domain *d)
+{
+    /* Nothing to do */
+}
+
 static void save_csr_regs(struct vcpu *vcpu)
 {
     /* vcpu->arch.hstatus = csr_read(CSR_HSTATUS); */
