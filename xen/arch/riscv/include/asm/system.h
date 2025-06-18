@@ -79,6 +79,8 @@ static inline bool local_irq_is_enabled(void)
 struct vcpu * asmlinkage __context_switch(struct vcpu *prev,
                                           const struct vcpu *next);
 
+void stop_cpu(void);
+
 #endif /* __ASSEMBLER__ */
 
 #endif /* RISCV_SYSTEM_H */

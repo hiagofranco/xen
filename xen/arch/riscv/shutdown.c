@@ -1,7 +1,10 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
+#include <xen/lib.h>
 #include <xen/shutdown.h>
 
+#include <asm/processor.h>
 #include <asm/sbi.h>
+#include <asm/system.h>
 
 void machine_halt(void)
 {
@@ -24,4 +27,21 @@ void machine_restart(unsigned int delay_millisecs)
      */
 
     machine_halt();
+}
+
+void stop_cpu(void)
+{
+    int ret;
+
+    local_irq_disable();
+
+    ret = sbi_hsm_hart_stop();
+    if ( ret )
+        printk("%s: sbi_hsm_hart_stop() returns error code: %d\n",
+               __func__, ret);
+
+    for ( ; ; )
+        wfi();
+
+    unreachable();
 }

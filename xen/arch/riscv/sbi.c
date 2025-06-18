@@ -322,6 +322,20 @@ int sbi_remote_hfence_gvma_vmid(const cpumask_t *cpu_mask, vaddr_t start,
                       cpu_mask, start, size, vmid, 0);
 }
 
+int sbi_hsm_hart_stop(void)
+{
+    struct sbiret ret;
+
+    ASSERT(!local_irq_is_enabled());
+
+    ret = sbi_ecall(SBI_EXT_HSM, SBI_EXT_HSM_HART_STOP, 0, 0, 0, 0, 0, 0);
+
+    if ( ret.error )
+        return sbi_err_map_xen_errno(ret.error);
+    else
+        return 0;
+}
+
 /* This function must always succeed. */
 #define sbi_get_spec_version()  \
     sbi_ext_base_func(SBI_EXT_BASE_GET_SPEC_VERSION)
