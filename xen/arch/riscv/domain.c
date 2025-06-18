@@ -2,10 +2,14 @@
 
 #include <xen/cpumask.h>
 #include <xen/init.h>
+#include <xen/livepatch.h>
 #include <xen/mm.h>
+#include <xen/rcupdate.h>
 #include <xen/sections.h>
 #include <xen/sched.h>
 #include <xen/smp.h>
+#include <xen/softirq.h>
+#include <xen/tasklet.h>
 #include <xen/vmap.h>
 
 #include <asm/bitops.h>
@@ -16,6 +20,7 @@
 #include <asm/imsic.h>
 #include <asm/intc.h>
 #include <asm/mmio.h>
+#include <asm/processor.h>
 #include <asm/riscv_encoding.h>
 #include <asm/vtimer.h>
 
@@ -638,6 +643,65 @@ void context_switch(struct vcpu *prev, struct vcpu *next)
     schedule_tail(prev);
 }
 
+static void do_idle(void)
+{
+    unsigned int cpu = smp_processor_id();
+
+    rcu_idle_enter(cpu);
+    /* rcu_idle_enter() can raise TIMER_SOFTIRQ. Process it now. */
+    process_pending_softirqs();
+
+    local_irq_disable();
+    if ( cpu_is_haltable(cpu) )
+    {
+        wfi();
+    }
+    local_irq_enable();
+
+    rcu_idle_exit(cpu);
+}
+
+static void noreturn idle_loop(void)
+{
+    unsigned int cpu = smp_processor_id();
+
+    for ( ; ; )
+    {
+        if ( cpu_is_offline(cpu) )
+            stop_cpu();
+
+        /* Are we here for running vcpu context tasklets, or for idling? */
+        if ( unlikely(tasklet_work_to_do(cpu)) )
+        {
+            do_tasklet();
+            /* Livepatch work is always kicked off via a tasklet. */
+            check_for_livepatch_work();
+        }
+        /*
+         * Test softirqs twice --- first to see if should even try scrubbing
+         * and then, after it is done, whether softirqs became pending
+         * while we were scrubbing.
+         */
+        else if ( !softirq_pending(cpu) && !scrub_free_pages() &&
+                  !softirq_pending(cpu) )
+            do_idle();
+
+        do_softirq();
+    }
+}
+
+void startup_cpu_idle_loop(void)
+{
+    struct vcpu *v = current;
+
+    ASSERT(is_idle_vcpu(v));
+
+    cpumask_set_cpu(v->processor, v->domain->dirty_cpumask);
+    write_atomic(&v->dirty_cpu, v->processor);
+
+    reset_stack_and_jump(idle_loop);
+}
+
 void continue_running(struct vcpu *same)
 {
     /* Nothing to do. */
@@ -676,9 +740,4 @@ static void __init __maybe_unused build_assertions(void)
     GPR_LIST(CHECK_GPR_INDEX);
 
 #undef CHECK_GPR_INDEX
-}
-
-static void noreturn idle_loop(void)
-{
-    BUG_ON("unimplemented");
 }
