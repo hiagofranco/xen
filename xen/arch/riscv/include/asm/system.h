@@ -78,6 +78,8 @@ static inline bool local_irq_is_enabled(void)
 
 extern struct vcpu *__context_switch(struct vcpu *prev, struct vcpu *next);
 
+void stop_cpu(void);
+
 #endif /* __ASSEMBLER__ */
 
 #endif /* ASM__RISCV__SYSTEM_H */

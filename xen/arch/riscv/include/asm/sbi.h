@@ -30,6 +30,7 @@
 #define SBI_EXT_BASE                    0x10
 #define SBI_EXT_RFENCE                  0x52464E43
 #define SBI_EXT_TIME                    0x54494D45
+#define SBI_EXT_HSM                     0x48534D
 
 /* SBI function IDs for BASE extension */
 #define SBI_EXT_BASE_GET_SPEC_VERSION   0x0
@@ -64,6 +65,13 @@
 #define SBI_ERR_INVALID_ADDRESS (-5)
 
 #define SBI_SPEC_VERSION_DEFAULT 0x1
+
+enum sbi_ext_hsm_fid {
+    SBI_EXT_HSM_HART_START = 0,
+    SBI_EXT_HSM_HART_STOP,
+    SBI_EXT_HSM_HART_STATUS,
+    SBI_EXT_HSM_HART_SUSPEND,
+};
 
 struct sbiret {
     long error;
@@ -137,6 +145,17 @@ int sbi_remote_hfence_gvma(const cpumask_t *cpu_mask, vaddr_t start,
  */
 int sbi_remote_hfence_gvma_vmid(const cpumask_t *cpu_mask, vaddr_t start,
                                 size_t size, unsigned long vmid);
+
+/*
+ * Request the SBI implementation to stop executing the calling hart in
+ * supervisor-mode and return its ownership to the SBI implementation.
+ * This call is not expected to return under normal conditions.
+ *
+ * The sbi_hart_stop() must be called with supervisor-mode interrupts disabled.
+ * The possible error codes returned in sbiret.error are are:
+ * SBI_ERR_FAILED -> Failed to stop execution of the current hart
+ */
+int sbi_hsm_hart_stop(void);
 
 /*
  * Initialize SBI library
