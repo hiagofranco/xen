@@ -55,6 +55,12 @@ DECLARE_PER_CPU(struct vcpu *, curr_vcpu);
 #define set_current(vcpu)  do { current = (vcpu); } while (0)
 #define get_cpu_current(cpu)  per_cpu(curr_vcpu, cpu)
 
+static inline struct cpu_info *get_cpu_info(void)
+{
+    /* guest_cpu_info also points to the top of the stack. */
+    return tp->guest_cpu_info;
+}
+
 #define guest_cpu_user_regs() ({ BUG_ON("unimplemented"); NULL; })
 #define vcpu_guest_cpu_user_regs(vcpu) \
     (&(vcpu)->arch.cpu_info->guest_cpu_user_regs)
@@ -65,6 +71,8 @@ DECLARE_PER_CPU(struct vcpu *, curr_vcpu);
             "jr %1" :: "r" (stack), "r" (fn) : "memory" );  \
     unreachable();                                          \
 } while ( false )
+
+#define reset_stack_and_jump(fn) switch_stack_and_jump(get_cpu_info(), fn)
 
 #define get_per_cpu_offset() __per_cpu_offset[smp_processor_id()]
 
