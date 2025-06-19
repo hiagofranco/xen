@@ -99,3 +99,47 @@ restore_registers:
 
         sret
 END(handle_trap)
+
+/*
+ * struct vcpu *__context_switch(struct vcpu *prev, struct vcpu *next)
+ *
+ * This is called on prev's stack, and returns on next's.
+ *
+ * a0 - prev
+ * a1 - next
+ *
+ * Returns prev in a0
+ */
+FUNC(__context_switch)
+        REG_S   s0, VCPU_XEN_SAVED_CONTEXT_S0(a0)
+        REG_S   s1, VCPU_XEN_SAVED_CONTEXT_S1(a0)
+        REG_S   s2, VCPU_XEN_SAVED_CONTEXT_S2(a0)
+        REG_S   s3, VCPU_XEN_SAVED_CONTEXT_S3(a0)
+        REG_S   s4, VCPU_XEN_SAVED_CONTEXT_S4(a0)
+        REG_S   s5, VCPU_XEN_SAVED_CONTEXT_S5(a0)
+        REG_S   s6, VCPU_XEN_SAVED_CONTEXT_S6(a0)
+        REG_S   s7, VCPU_XEN_SAVED_CONTEXT_S7(a0)
+        REG_S   s8, VCPU_XEN_SAVED_CONTEXT_S8(a0)
+        REG_S   s9, VCPU_XEN_SAVED_CONTEXT_S9(a0)
+        REG_S   s10, VCPU_XEN_SAVED_CONTEXT_S10(a0)
+        REG_S   s11, VCPU_XEN_SAVED_CONTEXT_S11(a0)
+        REG_S   sp, VCPU_XEN_SAVED_CONTEXT_SP(a0)
+        REG_S   ra, VCPU_XEN_SAVED_CONTEXT_RA(a0)
+
+        REG_L   s0, VCPU_XEN_SAVED_CONTEXT_S0(a1)
+        REG_L   s1, VCPU_XEN_SAVED_CONTEXT_S1(a1)
+        REG_L   s2, VCPU_XEN_SAVED_CONTEXT_S2(a1)
+        REG_L   s3, VCPU_XEN_SAVED_CONTEXT_S3(a1)
+        REG_L   s4, VCPU_XEN_SAVED_CONTEXT_S4(a1)
+        REG_L   s5, VCPU_XEN_SAVED_CONTEXT_S5(a1)
+        REG_L   s6, VCPU_XEN_SAVED_CONTEXT_S6(a1)
+        REG_L   s7, VCPU_XEN_SAVED_CONTEXT_S7(a1)
+        REG_L   s8, VCPU_XEN_SAVED_CONTEXT_S8(a1)
+        REG_L   s9, VCPU_XEN_SAVED_CONTEXT_S9(a1)
+        REG_L   s10, VCPU_XEN_SAVED_CONTEXT_S10(a1)
+        REG_L   s11, VCPU_XEN_SAVED_CONTEXT_S11(a1)
+        REG_L   sp, VCPU_XEN_SAVED_CONTEXT_SP(a1)
+        REG_L   ra, VCPU_XEN_SAVED_CONTEXT_RA(a1)
+
+        ret
+END(__context_switch)
