@@ -22,6 +22,8 @@ struct pcpu_info {
      * to the top of the stack.
      */
     struct cpu_info *guest_cpu_info;
+
+    unsigned long tmp;
 } __cacheline_aligned;
 
 /* tp points to one of these */

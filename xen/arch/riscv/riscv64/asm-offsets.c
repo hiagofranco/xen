@@ -55,6 +55,8 @@ void asm_offsets(void)
     OFFSET(CPU_USER_REGS_PREGS, struct cpu_user_regs, pregs);
     BLANK();
     DEFINE(PCPU_INFO_SIZE, sizeof(struct pcpu_info));
+    OFFSET(PCPU_INFO_TMP, struct pcpu_info, tmp);
+    OFFSET(PCPU_INFO_GUEST_CPU_INFO, struct pcpu_info, guest_cpu_info);
     BLANK();
     OFFSET(VCPU_XEN_SAVED_CONTEXT_S0, struct vcpu, arch.xen_saved_context.s0);
     OFFSET(VCPU_XEN_SAVED_CONTEXT_S1, struct vcpu, arch.xen_saved_context.s1);
@@ -70,5 +72,7 @@ void asm_offsets(void)
     OFFSET(VCPU_XEN_SAVED_CONTEXT_S11, struct vcpu, arch.xen_saved_context.s11);
     OFFSET(VCPU_XEN_SAVED_CONTEXT_SP, struct vcpu, arch.xen_saved_context.sp);
     OFFSET(VCPU_XEN_SAVED_CONTEXT_RA, struct vcpu, arch.xen_saved_context.ra);
+    BLANK();
+    DEFINE(CPUINFO_SIZE, sizeof(struct cpu_info));
     BLANK();
 }

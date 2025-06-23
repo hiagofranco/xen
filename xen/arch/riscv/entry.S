@@ -4,19 +4,38 @@
 #include <asm/riscv_encoding.h>
 #include <asm/traps.h>
 
-/* WIP: only works while interrupting Xen context */
 FUNC(handle_trap)
+        /*
+        * swap sscratch and tp
+        *
+        * After the swap, if a guest trapped, tp will have a pointer to
+        * pcpu_info of the guest.
+        * After the swap, If xen trapped, tp will be empty.
+        */
+        csrrw   tp, CSR_SSCRATCH, tp
+
+        /* Based on Linux kenrel arch/riscv/entry.S */
+        bnez    tp, .L_guest_trapped
+
+/* tp = NULL => XEN trapped */
+.L_restore_kernel_tpsp:
+        csrr    tp, CSR_SSCRATCH
+        REG_S   sp, PCPU_INFO_TMP(tp)
+        addi    sp, sp, -(CPUINFO_SIZE)
+
+        j       .L_save_to_stack
+
+/* tp != 0 => Guest trapped */
+.L_guest_trapped:
+        REG_S   sp, PCPU_INFO_TMP(tp)
+        REG_L   sp, PCPU_INFO_GUEST_CPU_INFO(tp)
 
     /* Exceptions from xen */
-save_to_stack:
-        /* Save context to stack */
-        REG_S   sp, (CPU_USER_REGS_SP - CPU_USER_REGS_SIZE) (sp)
-        addi    sp, sp, -CPU_USER_REGS_SIZE
-        REG_S   t0, CPU_USER_REGS_T0(sp)
-
+.L_save_to_stack:
         /* Save registers */
         REG_S   ra, CPU_USER_REGS_RA(sp)
         REG_S   gp, CPU_USER_REGS_GP(sp)
+        REG_S   t0, CPU_USER_REGS_T0(sp)
         REG_S   t1, CPU_USER_REGS_T1(sp)
         REG_S   t2, CPU_USER_REGS_T2(sp)
         REG_S   s0, CPU_USER_REGS_S0(sp)
@@ -43,24 +62,55 @@ save_to_stack:
         REG_S   t4, CPU_USER_REGS_T4(sp)
         REG_S   t5, CPU_USER_REGS_T5(sp)
         REG_S   t6, CPU_USER_REGS_T6(sp)
+
         csrr    t0, CSR_SEPC
         REG_S   t0, CPU_USER_REGS_SEPC(sp)
+
         csrr    t0, CSR_SSTATUS
         REG_S   t0, CPU_USER_REGS_SSTATUS(sp)
 
         csrr    t0, CSR_HSTATUS
         REG_S   t0, CPU_USER_REGS_HSTATUS(sp)
 
+        /* Save original SP */
+        REG_L   t0, PCPU_INFO_TMP(tp)
+        REG_S   t0, CPU_USER_REGS_SP(sp)
+
+        csrr    t0, CSR_SSCRATCH
+        REG_S   t0, CPU_USER_REGS_TP(sp)
+
+        /*
+         * Set the scratch register to 0, so that if a recursive exception
+         * occurs, the exception vector knows it came from the hypervisor.
+         */
+        csrw    CSR_SSCRATCH, x0
+
         mv      a0, sp
         call    do_trap
 
-restore_registers:
+        REG_L   t0, CPU_USER_REGS_HSTATUS(sp)
+        andi    t0, t0, HSTATUS_SPV
+
+        beqz    t0, .L_restore_registers
+
+        /*
+         * Save TP into the scratch register, as it was swapped at the start
+         * of handle_trap(), so we can locate the hypervisor data structures
+         * again.
+         * This is only necessary when a trap occurs from a guest, as in that
+         * case the SSCRATCH register is expected to contain a pointer to
+         * struct pcpu_info.
+         */
+        csrw    CSR_SSCRATCH, tp
+
+.L_restore_registers:
         /* Restore stack_cpu_regs */
         REG_L	t0, CPU_USER_REGS_HSTATUS(sp)
         csrw	CSR_HSTATUS, t0
 
         REG_L   t0, CPU_USER_REGS_SEPC(sp)
         csrw    CSR_SEPC, t0
+
         REG_L   t0, CPU_USER_REGS_SSTATUS(sp)
         csrw    CSR_SSTATUS, t0
 
@@ -93,8 +143,7 @@ restore_registers:
         REG_L   t4, CPU_USER_REGS_T4(sp)
         REG_L   t5, CPU_USER_REGS_T5(sp)
         REG_L   t6, CPU_USER_REGS_T6(sp)
-
-        /* Restore sp */
+        REG_L   tp, CPU_USER_REGS_TP(sp)
         REG_L   sp, CPU_USER_REGS_SP(sp)
 
         sret
