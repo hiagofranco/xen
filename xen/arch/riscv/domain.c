@@ -252,12 +252,29 @@ static void vcpu_csr_init(struct vcpu *v)
     }
 }
 
+static void schedule_tail(struct vcpu *prev);
+static void noreturn idle_loop(void);
+void asmlinkage noreturn return_to_new_vcpu(void);
+
 static void continue_new_vcpu(struct vcpu *prev)
 {
-    /* Avoid an unused-function error until this function is implemented. */
-    (void)vcpu_set_vsxl;
+    schedule_tail(prev);
 
-    BUG_ON("unimplemented\n");
+    if ( is_idle_vcpu(current) )
+        reset_stack_and_jump(idle_loop);
+
+    vcpu_set_vsxl(current);
+
+    /*
+     * return_to_new_vcpu() sets up hstatus.SPV, sstatus.SPP and sepc so
+     * that sret enters the guest in VS-mode. A trap taken in HS-mode
+     * overwrites all of them (trap entry clears hstatus.SPV in particular),
+     * so interrupts have to stay disabled until sret. They are re-enabled by
+     * sret itself, as return_to_new_vcpu() also sets sstatus.SPIE.
+     */
+    local_irq_disable();
+
+    reset_stack_and_jump(return_to_new_vcpu);
 }
 
 int arch_vcpu_create(struct vcpu *v)
@@ -628,4 +645,9 @@ static void __init __maybe_unused build_assertions(void)
     GPR_LIST(CHECK_GPR_INDEX);
 
 #undef CHECK_GPR_INDEX
+}
+
+static void noreturn idle_loop(void)
+{
+    BUG_ON("unimplemented");
 }

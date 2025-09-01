@@ -147,3 +147,42 @@ FUNC(__context_switch)
 
         ret
 END(__context_switch)
+
+/*
+ * Enter a vCPU for the first time. Must be called with interrupts disabled,
+ * see continue_new_vcpu().
+ */
+FUNC(return_to_new_vcpu)
+        REG_L   t0, CPU_USER_REGS_HSTATUS(sp)
+        csrw    CSR_HSTATUS, t0
+
+        REG_L   t0, CPU_USER_REGS_SEPC(sp)
+        csrw    CSR_SEPC, t0
+
+        /* .a0 holds the hart id */
+        REG_L   a0, CPU_USER_REGS_A0(sp)
+
+        /*
+         * .a1 holds the DTB address for the boot vCPU, or the opaque value
+         * passed to SBI HSM hart_start() for secondary vCPUs
+         */
+        REG_L   a1, CPU_USER_REGS_A1(sp)
+
+        /* Return to (V)S-mode, with interrupts re-enabled by sret */
+        li      t0, SSTATUS_SPP | SSTATUS_SPIE
+        csrs    CSR_SSTATUS, t0
+
+        /*
+         * sret doesn't switch stacks and leaves the GPRs alone, so every
+         * register which isn't meaningful to the vCPU being started has to be
+         * cleared here: otherwise the guest would see Xen's values, sp (this
+         * vCPU's Xen stack) and ra among them.
+         */
+        .irp reg, ra, sp, gp, tp, t0, t1, t2, s0, s1, a2, a3, a4, a5, a6, a7, \
+                  s2, s3, s4, s5, s6, s7, s8, s9, s10, s11, t3, t4, t5, t6
+        mv      \reg, zero
+        .endr
+
+        /* Enter guest */
+        sret
+END(return_to_new_vcpu)
