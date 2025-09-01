@@ -192,3 +192,26 @@ FUNC(__context_switch)
 
         ret
 END(__context_switch)
+
+/* t0 is used as a temporary reg and is clobbered to oblivion */
+FUNC(return_to_new_vcpu)
+        /* Backup tp into sscratch */
+        csrrw   tp, CSR_SSCRATCH, tp
+
+        /* Set vCPU registers */
+        REG_L   t0, CPU_USER_REGS_SEPC(sp)
+        csrw    sepc, t0
+
+        /* Hartid goes to a0 */
+        REG_L   a0, CPU_USER_REGS_A0(sp)
+
+        /* DTB goes to a1 */
+        REG_L   a1, CPU_USER_REGS_A1(sp)
+
+        /* Set guest mode to supervisor */
+        li      t0, SSTATUS_SPP
+        csrs    CSR_SSTATUS, t0
+
+        /* Enter guest */
+        sret
+END(return_to_new_vcpu)

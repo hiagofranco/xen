@@ -11,6 +11,7 @@
 #include <xen/xvmalloc.h>
 
 #include <asm/aia.h>
+#include <asm/aplic.h>
 #include <asm/cpufeature.h>
 #include <asm/csr.h>
 #include <asm/current.h>

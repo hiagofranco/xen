@@ -12,16 +12,20 @@
 #include <xen/tasklet.h>
 #include <xen/vmap.h>
 
+#include <asm/aia.h>
+#include <asm/aplic.h>
 #include <asm/bitops.h>
 #include <asm/cpufeature.h>
 #include <asm/csr.h>
 #include <asm/current.h>
+#include <asm/imsic.h>
 #include <asm/intc.h>
 #include <asm/mmio.h>
 #include <asm/processor.h>
 #include <asm/riscv_encoding.h>
 #include <asm/vmid.h>
 #include <asm/sbi.h>
+#include <asm/p2m.h>
 #include <asm/vtimer.h>
 
 struct csr_masks {
@@ -140,9 +144,45 @@ static void vcpu_csr_init(struct vcpu *v)
     v->arch.hie = MIP_SGEIP;
 }
 
+static void schedule_tail(struct vcpu *prev);
+static void noreturn idle_loop(void);
+extern void noreturn return_to_new_vcpu(void);
+
 static void continue_new_vcpu(struct vcpu *prev)
 {
-    BUG_ON("unimplemented\n");
+    schedule_tail(prev);
+
+    if ( is_idle_vcpu(current) )
+        reset_stack_and_jump(idle_loop);
+    else
+    {
+        vcpu_aia_init(current);
+
+        /*
+         * During a context switch to a new vCPU, interrupts must be disabled
+         * to guarantee that the vCPU's CSR state can be safely restored into
+         * the hart without being clobbered by an interrupt trap.
+         *
+         * For example, when return_to_new_vcpu() finishes, it executes sret.
+         * At that point, the hart checks hstatus.SPV=1 and sstatus.SPP=1 in
+         * order to return from HS-mode into VS-mode. If an interrupt were to
+         * arrive before sret, the trap entry logic would implicitly clear
+         * hstatus.SPV to 0. Correctly restoring it afterwards is non-trivial,
+         * and if left as 0, sret would incorrectly return to HS-mode instead
+         * of VS-mode.
+         *
+         * To avoid this, interrupts are kept disabled during the restore.
+         * Additionally, setting sstatus.SPIE=1 ensures that after sret is
+         * executed (as status.SIE will be loaded from SPIE), HS-mode will
+         * continue to receive interrupts normally.
+         */
+        local_irq_disable();
+        csr_set(sstatus, SSTATUS_SPIE);
+
+        csr_write(CSR_HSTATUS, vcpu_guest_cpu_user_regs(current)->hstatus);
+
+        reset_stack_and_jump(return_to_new_vcpu);
+    }
 }
 
 int arch_vcpu_create(struct vcpu *v)
