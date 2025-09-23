@@ -16,6 +16,7 @@
 #include <xen/irq.h>
 #include <xen/mm.h>
 #include <xen/sections.h>
+#include <xen/sched.h>
 #include <xen/spinlock.h>
 #include <xen/types.h>
 #include <xen/vmap.h>
@@ -37,6 +38,60 @@ static struct aplic_priv aplic = {
 static struct intc_info __ro_after_init aplic_info = {
     .hw_variant = INTC_APLIC,
 };
+
+static unsigned long aplic_hart_field(unsigned long hartid)
+{
+    const struct imsic_config *imsic = imsic_get_config();
+    unsigned int lhxw = imsic->hart_index_bits;
+    unsigned int hhxw = imsic->group_index_bits;
+    unsigned int hhxs =
+        imsic->group_index_shift - APLIC_xMSICFGADDR_PPN_SHIFT * 2;
+    unsigned long tppn =
+        imsic->msi[hartid].base_addr >> APLIC_xMSICFGADDR_PPN_SHIFT;
+    unsigned long group_index =
+        (tppn >> APLIC_xMSICFGADDR_PPN_HHX_SHIFT(hhxs)) &
+        APLIC_xMSICFGADDR_PPN_HHX_MASK(hhxw);
+
+    return (group_index << lhxw) | hartid;
+}
+
+uint32_t aplic_msi_target_gen(const struct vcpu *target_vcpu, uint32_t base_val)
+{
+    unsigned int guest_id = vcpu_guest_file_id(target_vcpu);
+    unsigned long hart_id = cpuid_to_hartid(target_vcpu->processor);
+    unsigned long hart_field = aplic_hart_field(hart_id);
+
+    base_val &= APLIC_TARGET_EIID_MASK;
+    base_val |= MASK_INSR(guest_id, APLIC_TARGET_GUEST_IDX_MASK);
+    base_val |= MASK_INSR(hart_field, APLIC_TARGET_HART_IDX_MASK);
+
+    return base_val;
+}
+
+uint32_t aplic_hw_read_reg(unsigned int offset, uint32_t mask)
+{
+    unsigned long flags;
+    uint32_t val;
+
+    ASSERT((offset < aplic.size) && IS_ALIGNED(offset, sizeof(uint32_t)));
+
+    spin_lock_irqsave(&aplic.lock, flags);
+    val = readl((volatile void __iomem *)aplic.regs + offset) & mask;
+    spin_unlock_irqrestore(&aplic.lock, flags);
+
+    return val;
+}
+
+void aplic_hw_write_reg(unsigned int offset, uint32_t value)
+{
+    unsigned long flags;
+
+    ASSERT((offset < aplic.size) && IS_ALIGNED(offset, sizeof(uint32_t)));
+
+    spin_lock_irqsave(&aplic.lock, flags);
+    writel(value, (volatile void __iomem *)aplic.regs + offset);
+    spin_unlock_irqrestore(&aplic.lock, flags);
+}
 
 static void __init aplic_init_hw_interrupts(void)
 {

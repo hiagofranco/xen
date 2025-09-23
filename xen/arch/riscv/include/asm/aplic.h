@@ -47,6 +47,7 @@
 #define APLIC_SOURCECFG_SM_EDGE_FALL    0x5
 #define APLIC_SOURCECFG_SM_LEVEL_HIGH   0x6
 #define APLIC_SOURCECFG_SM_LEVEL_LOW    0x7
+#define APLIC_SOURCECFG_D               BIT(10, U)
 
 #define APLIC_SMSICFGADDR               0x1bc8
 #define APLIC_SMSICFGADDRH              0x1bcc
@@ -75,6 +76,8 @@
 #define APLIC_TARGET_LAST               0x3ffc
 #define APLIC_TARGET_HART_IDX_SHIFT     18
 #define APLIC_TARGET_EIID_MASK          0x7ff
+#define APLIC_TARGET_HART_IDX_MASK      0xfffc0000
+#define APLIC_TARGET_GUEST_IDX_MASK     0x3f000
 
 #define APLIC_IDC_SIZE                  32
 
@@ -83,6 +86,22 @@
 
 #define APLIC_SIZE(nr_cpus) \
     (APLIC_MIN_SIZE + APLIC_SIZE_ALIGN(APLIC_IDC_SIZE * (nr_cpus)))
+
+/*
+ * Using setip is fine here, as all SET* and CLR* register groups consist of 32
+ * registers and therefore have identical sizes.
+ *
+ * Lowest 2 bits are always zero for SET* and CLR* registers.
+ */
+#define APLIC_SETCLR_OFFSET_MASK \
+    (sizeof_field(struct aplic_regs, setip) - sizeof(uint32_t))
+
+#define APLIC_xMSICFGADDR_PPN_SHIFT IMSIC_MMIO_PAGE_SHIFT
+
+#define APLIC_xMSICFGADDR_PPN_HHX_MASK(hhxw) \
+    (BIT(hhxw, UL) - 1)
+#define APLIC_xMSICFGADDR_PPN_HHX_SHIFT(hhxs) \
+    ((hhxs) + APLIC_xMSICFGADDR_PPN_SHIFT)
 
 struct aplic_regs {
     uint32_t domaincfg;         /* 0x0000 */
@@ -126,5 +145,8 @@ struct aplic_regs {
     uint32_t genmsi;            /* 0x3000 */
     uint32_t target[1023];      /* 0x3004 */
 };
+
+uint32_t aplic_hw_read_reg(unsigned int offset, uint32_t mask);
+void aplic_hw_write_reg(unsigned int offset, uint32_t value);
 
 #endif /* ASM_RISCV_APLIC_H */

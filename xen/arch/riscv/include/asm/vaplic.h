@@ -26,6 +26,9 @@ struct vaplic_regs {
 struct vaplic {
     struct vintc vintc;
     struct vaplic_regs regs;
+
+    paddr_t regs_start;
+    unsigned int regs_size;
 };
 
 int domain_vaplic_init(struct domain *d);

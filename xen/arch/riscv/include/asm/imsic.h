@@ -40,6 +40,16 @@ struct imsic_config {
     /* Base address */
     paddr_t base_addr;
 
+    /*
+     * MSI Target Address Scheme
+     *
+     * XLEN-1                                                12     0
+     * |                                                     |     |
+     * -------------------------------------------------------------
+     * |xxxxxx|Group Index|xxxxxxxxxxx|HART Index|Guest Index|  0  |
+     * -------------------------------------------------------------
+     */
+
     /* Bits representing Guest index, HART index, and Group index */
     unsigned int guest_index_bits;
     unsigned int hart_index_bits;
