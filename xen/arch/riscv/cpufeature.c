@@ -196,6 +196,7 @@ static const struct riscv_isa_ext_entry __initconstrel riscv_isa_ext[] = {
     RISCV_ISA_EXT_ENTRY(zba,            ANY),
     RISCV_ISA_EXT_ENTRY(zbb,            ANY),
     RISCV_ISA_EXT_ENTRY(zbs,            ANY),
+    RISCV_ISA_EXT_ENTRY(shtvala,        NONE),
     RISCV_ISA_EXT_ENTRY(smaia,          ANY),
     RISCV_ISA_EXT_ENTRY(smstateen,      ANY),
     RISCV_ISA_EXT_ENTRY(ssaia,          ANY),
