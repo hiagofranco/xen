@@ -177,7 +177,24 @@ static void check_for_pcpu_work(void)
 {
     struct vcpu *curr = current;
 
-    vintc_enter_guest(curr);
+    ASSERT(!local_irq_is_enabled());
+
+    for ( ; ; )
+    {
+        /*
+         * On every iteration: do_softirq() may switch curr out, and once
+         * curr is switched in again, possibly on another pCPU, it returns
+         * from do_softirq() and goes on with this loop.
+         */
+        vintc_enter_guest(curr);
+
+        if ( !softirq_pending(smp_processor_id()) )
+            break;
+
+        local_irq_enable();
+        do_softirq();
+        local_irq_disable();
+    }
 
     vcpu_sync_interrupts(curr);
 
