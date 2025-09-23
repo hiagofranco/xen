@@ -35,3 +35,14 @@ Other extensions recognised by Xen are listed in riscv_isa_ext[] in
 xen/arch/riscv/cpufeature.c. Xen uses them when present, but they are not
 needed to boot. The second column of that table says whether the extension
 is also exposed to guests.
+
+Some of them are nevertheless recommended, as functionality depends on them:
+- Shtvala:
+  Guarantees that htval is written with the faulting guest physical address
+  on a guest-page fault. Without it an implementation may write zero instead,
+  which can't be told apart from a genuine fault on guest physical addresses
+  0-3. Xen needs that address to emulate a guest's MMIO accesses; recovering
+  it in software (by walking the guest's VS-stage page tables) isn't
+  implemented, so on such hardware a guest-page fault reported with a zero
+  htval crashes the domain. See resolve_faulting_gpa() in
+  xen/arch/riscv/emulate.c.

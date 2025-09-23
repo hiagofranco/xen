@@ -9,6 +9,7 @@
 #include <xen/sched.h>
 #include <xen/types.h>
 
+#include <asm/cpufeature.h>
 #include <asm/csr.h>
 #include <asm/current.h>
 #include <asm/emulate.h>
@@ -58,7 +59,31 @@ static bool htinst_is_pseudo(unsigned long htinst)
  */
 static int resolve_faulting_gpa(struct guest_fault *gf)
 {
-    return -EOPNOTSUPP;
+    /*
+     * A zero htval is either a genuine fault on guest physical address 0-3, or
+     * an implementation which does not report the address at all; only Shtvala
+     * tells the two apart.
+     *
+     * TODO: where it is absent, recover the address in software rather than
+     * giving up.
+     */
+    if ( !gf->htval &&
+         !riscv_isa_extension_available(NULL, RISCV_ISA_EXT_shtvala) )
+    {
+        printk_once(XENLOG_WARNING
+                    "Shtvala isn't supported by h/w; s/w VS-stage walk required\n");
+        return -EOPNOTSUPP;
+    }
+
+    /*
+     * htval does not carry the two low bits of the address: for an explicit
+     * access they are those of the faulting guest virtual address in stval,
+     * and for an implicit access made for VS-stage translation they are zero.
+     */
+    gf->gpa = ((paddr_t)gf->htval << 2) |
+              (htinst_is_pseudo(gf->htinst) ? 0 : (gf->stval & 3));
+
+    return 0;
 }
 
 static int emulate_load(const struct guest_fault *gf)
