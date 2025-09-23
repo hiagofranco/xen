@@ -197,9 +197,11 @@ void do_trap(struct cpu_user_regs *cpu_regs)
     bool from_guest = cpu_regs->hstatus & HSTATUS_SPV;
 
     /*
-     * A synchronous trap taken in Xen context may come from a probing access
-     * like csr_read_safe(), covered by an exception table entry which resumes
-     * execution past the faulting instruction.
+     * A synchronous trap taken in Xen context may come from an access done on
+     * a vCPU's behalf, e.g. the hlv/hlvx sequences in read_guest(),
+     * or from a probing access like csr_read_safe(). Both are covered by
+     * exception table entries which record the fault details for the caller
+     * and resume execution past the faulting instruction.
      *
      * Traps taken from the guest must never be fixed up: sepc is then a guest
      * address, which the guest could point at an address listed in the
@@ -230,8 +232,9 @@ void do_trap(struct cpu_user_regs *cpu_regs)
     case CAUSE_LOAD_GUEST_PAGE_FAULT:
     case CAUSE_STORE_GUEST_PAGE_FAULT:
         /*
-         * Xen doesn't access guest memory, so it can't take a guest page
-         * fault itself: only a guest can get here.
+         * A guest page fault taken in Xen context comes from an hlv/hlvx
+         * access made on a vCPU's behalf and is dealt with by the
+         * fixup_exception() above, so only a guest can get here.
          */
         BUG_ON(!from_guest);
 
