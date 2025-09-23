@@ -178,6 +178,15 @@ static void check_for_pcpu_work(void)
 {
     struct vcpu *curr = current;
 
+    ASSERT(!local_irq_is_enabled());
+
+    while ( softirq_pending(smp_processor_id()) )
+    {
+        local_irq_enable();
+        do_softirq();
+        local_irq_disable();
+    }
+
     vcpu_sync_interrupts(curr);
 
     vcpu_flush_interrupts(curr);
