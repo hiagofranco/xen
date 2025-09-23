@@ -191,6 +191,67 @@ static void timer_interrupt(void)
     raise_softirq(TIMER_SOFTIRQ);
 }
 
+static always_inline unsigned long get_faulting_gpa(void)
+{
+    /*
+     * According to RISC-V spec:
+     *  18.2.8. Hypervisor Trap Value Register (htval)
+     *   ...
+     *   A guest physical address written to htval is shifted right by 2 bits
+     *   to accommodate addresses wider than the current XLEN.
+     *   ...
+     *   If the least-significant two bits of a faulting guest physical address
+     *   are needed, these bits are ordinarily the same as the
+     *   least-significant two bits of the faulting virtual address in stval.
+     *   For faults due to implicit memory accesses for VS-stage address
+     *   translation, the least-significant two bits are instead zeros. These
+     *   cases can be distinguished using the value provided in register htinst.
+     */
+    return (csr_read(CSR_HTVAL) << 2) | (csr_read(CSR_STVAL) & 0x3);
+}
+
+static int emulate_load(unsigned long fault_addr, unsigned long htinst)
+{
+    return -EOPNOTSUPP;
+}
+
+static int emulate_store(unsigned long fault_addr, unsigned long htinst)
+{
+    return -EOPNOTSUPP;
+}
+
+static void handle_guest_page_fault(unsigned long cause,
+                                    struct cpu_user_regs *regs)
+{
+    unsigned long addr;
+    int rc;
+
+    addr = get_faulting_gpa();
+
+    switch ( cause )
+    {
+    case CAUSE_LOAD_GUEST_PAGE_FAULT:
+        rc = emulate_load(addr, csr_read(CSR_HTINST));
+        break;
+
+    case CAUSE_STORE_GUEST_PAGE_FAULT:
+        rc = emulate_store(addr, csr_read(CSR_HTINST));
+        break;
+
+    default:
+        rc = -EOPNOTSUPP;
+        ASSERT_UNREACHABLE();
+        break;
+    }
+
+    if ( rc )
+        domain_crash(current->domain,
+                     "%s: unable to handle faulted guest %s addr %#lx\n",
+                     __func__,
+                     (cause == CAUSE_LOAD_GUEST_PAGE_FAULT) ? "load" : "store",
+                     addr);
+}
+
 void do_trap(struct cpu_user_regs *cpu_regs)
 {
     register_t pc = cpu_regs->sepc;
@@ -203,6 +264,11 @@ void do_trap(struct cpu_user_regs *cpu_regs)
         BUG_ON(!(cpu_regs->hstatus & HSTATUS_SPV));
 
         vsbi_handle_ecall(cpu_regs);
+        break;
+
+    case CAUSE_LOAD_GUEST_PAGE_FAULT:
+    case CAUSE_STORE_GUEST_PAGE_FAULT:
+        handle_guest_page_fault(cause, cpu_regs);
         break;
 
     case CAUSE_ILLEGAL_INSTRUCTION:
