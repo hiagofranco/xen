@@ -5,6 +5,8 @@
 #include <xen/types.h>
 
 struct domain;
+struct trap_info;
+struct vcpu;
 
 unsigned long raw_copy_to_guest(void *to, const void *from, unsigned len);
 unsigned long raw_copy_from_guest(void *to, const void *from, unsigned len);
@@ -24,6 +26,10 @@ unsigned long raw_clear_guest(void *to, unsigned int len);
 
 unsigned long copy_to_guest_phys(struct domain *d, paddr_t gpa, void *buf,
                                  unsigned long len);
+
+unsigned long riscv_vcpu_unpriv_read(bool read_insn,
+                                     unsigned long guest_addr,
+                                     struct trap_info *trap);
 
 #endif /* ASM__RISCV__GUEST_ACCESS_H */
 /*
