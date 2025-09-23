@@ -15,6 +15,7 @@
 #include <xen/init.h>
 #include <xen/irq.h>
 #include <xen/mm.h>
+#include <xen/sched.h>
 #include <xen/sections.h>
 #include <xen/spinlock.h>
 #include <xen/types.h>
@@ -123,6 +124,54 @@ static unsigned long aplic_hart_index(unsigned int cpu)
         APLIC_xMSICFGADDR_PPN_LHX_MASK(lhxw);
 
     return (g << lhxw) | h;
+}
+
+/*
+ * v->processor can't be used here: during a migration it names the new pCPU
+ * before the interrupt file is moved there. The caller has to hold
+ * vsfile_lock until the result is written to the h/w.
+ */
+uint32_t aplic_msi_target_gen(const struct vcpu *v, uint32_t base_val)
+{
+    const struct vimsic_state *vimsic_state = v->arch.vimsic_state;
+    unsigned int guest_id = vcpu_guest_file_id(v);
+    unsigned long hart_index;
+
+    ASSERT(rw_is_locked(&vimsic_state->vsfile_lock));
+    ASSERT(vimsic_state->vsfile_cpu < NR_CPUS);
+
+    hart_index = aplic_hart_index(vimsic_state->vsfile_cpu);
+
+    base_val &= APLIC_TARGET_EIID;
+    base_val |= MASK_INSR(guest_id, APLIC_TARGET_GUEST_IDX);
+    base_val |= MASK_INSR(hart_index, APLIC_TARGET_HART_IDX);
+
+    return base_val;
+}
+
+uint32_t aplic_hw_read_reg(unsigned int offset)
+{
+    unsigned long flags;
+    uint32_t val;
+
+    ASSERT((offset < aplic.size) && IS_ALIGNED(offset, sizeof(uint32_t)));
+
+    spin_lock_irqsave(&aplic.lock, flags);
+    val = readl((const volatile void __iomem *)aplic.regs + offset);
+    spin_unlock_irqrestore(&aplic.lock, flags);
+
+    return val;
+}
+
+void aplic_hw_write_reg(unsigned int offset, uint32_t value)
+{
+    unsigned long flags;
+
+    ASSERT((offset < aplic.size) && IS_ALIGNED(offset, sizeof(uint32_t)));
+
+    spin_lock_irqsave(&aplic.lock, flags);
+    writel(value, (volatile void __iomem *)aplic.regs + offset);
+    spin_unlock_irqrestore(&aplic.lock, flags);
 }
 
 static void __init aplic_init_hw_interrupts(void)

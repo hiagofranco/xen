@@ -47,4 +47,6 @@ struct aplic_priv {
  */
 extern unsigned int guest_aplic_num_sources;
 
+uint32_t aplic_msi_target_gen(const struct vcpu *v, uint32_t base_val);
+
 #endif /* RISCV_APLIC_PRIV_H */

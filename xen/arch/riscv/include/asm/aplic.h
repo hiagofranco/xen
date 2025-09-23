@@ -27,8 +27,6 @@
  * Blocks of related constants are sorted by register offset.
  */
 
-#define APLIC_CTRL_REGION_OFFSET_MASK       0x3fff
-
 #define APLIC_DOMAINCFG                     0x0000
 /*
  * domaincfg read-only fields (AIA spec):
@@ -39,6 +37,13 @@
 #define  APLIC_DOMAINCFG_IE             BIT(8, U)
 #define  APLIC_DOMAINCFG_DM             BIT(2, U)
 #define  APLIC_DOMAINCFG_BE             BIT(0, U)
+/*
+ * The bits a write may change. DM is WARL and hardwired to 1 as only MSI
+ * delivery mode is emulated. Everything else, including the read-only zero
+ * bit 7 and the reserved bits, has to read back as zero, and BE is WARL and
+ * hardwired to 0 as Xen is little-endian only.
+ */
+#define  APLIC_DOMAINCFG_WMASK          APLIC_DOMAINCFG_IE
 
 #define APLIC_SOURCECFG_BASE            0x0004
 #define APLIC_SOURCECFG_LAST            0x0ffc
@@ -59,6 +64,8 @@
 #define   APLIC_SOURCECFG_SM_LEVEL_HIGH 0x6
 #define   APLIC_SOURCECFG_SM_LEVEL_LOW  0x7
 
+#define APLIC_MMSICFGADDR               0x1bc0
+#define APLIC_MMSICFGADDRH              0x1bc4
 #define APLIC_SMSICFGADDR               0x1bc8
 #define APLIC_SMSICFGADDRH              0x1bcc
 
@@ -79,6 +86,7 @@
 #define APLIC_CLRIENUM                  0x1fdc
 
 #define APLIC_SETIPNUM_LE               0x2000
+#define APLIC_SETIPNUM_BE               0x2004
 
 #define APLIC_GENMSI                    0x3000
 
@@ -98,8 +106,17 @@
 #define APLIC_MIN_SIZE                  0x4000
 #define APLIC_SIZE_ALIGN(x)             ROUNDUP(x, APLIC_MIN_SIZE)
 
-#define APLIC_SIZE(nr_cpus) \
-    (APLIC_MIN_SIZE + APLIC_SIZE_ALIGN(APLIC_IDC_SIZE * (nr_cpus)))
+#define APLIC_SIZE(nr_idcs) \
+    (APLIC_MIN_SIZE + APLIC_SIZE_ALIGN(APLIC_IDC_SIZE * (nr_idcs)))
+
+/*
+ * Using setip is fine here, as all SET* and CLR* register groups consist of 32
+ * registers and therefore have identical sizes.
+ *
+ * Lowest 2 bits are always zero for SET* and CLR* registers.
+ */
+#define APLIC_SETCLR_OFFSET_MASK \
+    (sizeof_field(struct aplic_regs, setip) - sizeof(uint32_t))
 
 #define APLIC_xMSICFGADDR_PPN_SHIFT IMSIC_MMIO_PAGE_SHIFT
 
@@ -152,5 +169,8 @@ struct aplic_regs {
     uint32_t genmsi;            /* 0x3000 */
     uint32_t target[1023];      /* 0x3004 */
 };
+
+uint32_t aplic_hw_read_reg(unsigned int offset);
+void aplic_hw_write_reg(unsigned int offset, uint32_t value);
 
 #endif /* RISCV_APLIC_H */
