@@ -81,11 +81,6 @@ void smp_send_state_dump(unsigned int cpu)
 
 DEFINE_PER_CPU(struct vcpu *, curr_vcpu);
 
-void continue_running(struct vcpu *same)
-{
-    BUG_ON("unimplemented");
-}
-
 void startup_cpu_idle_loop(void)
 {
     BUG_ON("unimplemented");

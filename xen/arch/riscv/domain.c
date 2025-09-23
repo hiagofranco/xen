@@ -638,6 +638,11 @@ void context_switch(struct vcpu *prev, struct vcpu *next)
     schedule_tail(prev);
 }
 
+void continue_running(struct vcpu *same)
+{
+    /* Nothing to do. */
+}
+
 static void __init __maybe_unused build_assertions(void)
 {
 /*
