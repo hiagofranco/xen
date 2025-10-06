@@ -31,6 +31,10 @@
 #include <xen/static-memory.h>
 #include <xen/static-shmem.h>
 
+#ifdef CONFIG_RISCV
+void fdt_dump(void *fdt);
+#endif
+
 #define XENSTORE_PFN_LATE_ALLOC UINT64_MAX
 
 static domid_t __initdata xs_domid = DOMID_INVALID;
@@ -586,6 +590,10 @@ static int __init prepare_dtb_domU(struct domain *d, struct kernel_info *kinfo)
     ret = fdt_finish(kinfo->fdt);
     if ( ret < 0 )
         goto err;
+
+#ifdef CONFIG_RISCV
+    fdt_dump(kinfo->fdt);
+#endif
 
     return 0;
 
