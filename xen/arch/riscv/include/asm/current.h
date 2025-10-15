@@ -78,7 +78,7 @@ static inline struct cpu_info *get_cpu_info(void)
     return tp->curr_cpu_info;
 }
 
-#define guest_cpu_user_regs() ({ BUG_ON("unimplemented"); NULL; })
+#define guest_cpu_user_regs() (&get_cpu_info()->guest_cpu_user_regs)
 #define vcpu_guest_cpu_user_regs(vcpu) \
     (&(vcpu)->arch.cpu_info->guest_cpu_user_regs)
 
