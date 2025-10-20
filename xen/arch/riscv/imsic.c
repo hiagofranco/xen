@@ -20,6 +20,7 @@
 #include <xen/init.h>
 #include <xen/libfdt/libfdt.h>
 #include <xen/macros.h>
+#include <xen/rwlock.h>
 #include <xen/sched.h>
 #include <xen/smp.h>
 #include <xen/spinlock.h>
@@ -416,6 +417,28 @@ int imsic_map_guest_file(struct vcpu *v, unsigned int vsfile_id)
                __func__, paddr, gaddr);
 
     return res;
+}
+
+void imsic_state_save(struct vcpu *v)
+{
+    struct vimsic_state *imsic_state = v->arch.vimsic_state;
+    unsigned long flags;
+
+    /*
+     * SW interrupt file always has ->vsfile_pcpu = NR_CPUS so nothing specific
+     * should be done in this case.
+     */
+    if ( !vcpu_guest_file_id(v) )
+        return;
+
+    write_lock_irqsave(&imsic_state->vsfile_lock, flags);
+    imsic_state->vsfile_pcpu = cpuid_to_hartid(v->processor);
+    write_unlock_irqrestore(&imsic_state->vsfile_lock, flags);
+}
+
+void imsic_state_restore(struct vcpu *v)
+{
+    /* Nothing to do */
 }
 
 int vcpu_imsic_init(struct vcpu *v)
