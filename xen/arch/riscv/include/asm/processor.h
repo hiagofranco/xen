@@ -15,6 +15,10 @@
 /* On stack VCPU state */
 struct cpu_user_regs
 {
+    /*
+     * The order for register zero - t6 matters as it is used by some macros
+     * to calculate a proper access to a register, for example, SET_RD()
+     */
     unsigned long zero;
     unsigned long ra;
     unsigned long sp;
@@ -47,6 +51,7 @@ struct cpu_user_regs
     unsigned long t4;
     unsigned long t5;
     unsigned long t6;
+    /* Any order could be for the following registers: */
     unsigned long sepc;
     unsigned long sstatus;
     unsigned long hstatus;
