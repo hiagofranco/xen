@@ -61,6 +61,7 @@ struct arch_vcpu {
     register_t hedeleg;
     register_t hideleg;
     register_t henvcfg;
+    register_t hie;
     register_t hstateen0;
     register_t hvip;
 

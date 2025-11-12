@@ -12,8 +12,9 @@
 #include <xen/sched.h>
 #include <xen/softirq.h>
 
-#include <asm/extable.h>
+#include <asm/aia.h>
 #include <asm/cpufeature.h>
+#include <asm/extable.h>
 #include <asm/guest_access.h>
 #include <asm/intc.h>
 #include <asm/mmio.h>
@@ -517,6 +518,10 @@ void do_trap(struct cpu_user_regs *cpu_regs)
 
             case IRQ_S_TIMER:
                 timer_interrupt();
+                break;
+
+            case IRQ_S_GEXT:
+                hgei_interrupt();
                 break;
 
             default:

@@ -433,12 +433,31 @@ void imsic_state_save(struct vcpu *v)
 
     write_lock_irqsave(&imsic_state->vsfile_lock, flags);
     imsic_state->vsfile_pcpu = cpuid_to_hartid(v->processor);
+    /*
+     * Start to observe the VS-file from HS-mode: while the vCPU isn't
+     * running an interrupt pending in its VS-file is reported through HGEIP
+     * instead of being delivered to VS-mode, which lets Xen wake the vCPU up.
+     */
+    csr_set(CSR_HGEIE, BIT(imsic_state->guest_file_id, UL));
     write_unlock_irqrestore(&imsic_state->vsfile_lock, flags);
 }
 
 void imsic_state_restore(struct vcpu *v)
 {
-    /* Nothing to do */
+    struct vimsic_state *imsic_state = v->arch.vimsic_state;
+    unsigned long flags;
+
+    /* A s/w VS-file is never observed through HGEIP. */
+    if ( !vcpu_guest_file_id(v) )
+        return;
+
+    /*
+     * The vCPU is about to run, so hstatus.VGEIN delivers the VS-file's
+     * interrupts to it directly and there is nothing left for Xen to observe.
+     */
+    read_lock_irqsave(&imsic_state->vsfile_lock, flags);
+    csr_clear(CSR_HGEIE, BIT(imsic_state->guest_file_id, UL));
+    read_unlock_irqrestore(&imsic_state->vsfile_lock, flags);
 }
 
 int vcpu_imsic_init(struct vcpu *v)

@@ -128,6 +128,8 @@ static void vcpu_csr_init(struct vcpu *v)
         v->arch.hstateen0 = (hstateen0 & csr_masks.hstateen0) |
                             csr_masks.ro_one.hstateen0;
     }
+
+    v->arch.hie = MIP_SGEIP;
 }
 
 static void continue_new_vcpu(struct vcpu *prev)

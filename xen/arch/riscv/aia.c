@@ -8,6 +8,7 @@
 #include <xen/sched.h>
 #include <xen/spinlock.h>
 #include <xen/types.h>
+#include <xen/xvmalloc.h>
 
 #include <asm/aia.h>
 #include <asm/cpufeature.h>
@@ -18,6 +19,7 @@
 struct vgein_ctrl {
     unsigned long bmp;
     spinlock_t lock;
+    struct vcpu **owners;
     /* The least-significant bits are implemented first, apart from bit 0 */
     unsigned int geilen;
 };
@@ -77,9 +79,27 @@ static int vgein_init(unsigned int cpu)
     if ( !vgein->geilen )
         return -EOPNOTSUPP;
 
+    /*
+     * Guest interrupt file IDs run from 1 to geilen inclusive (0 means no
+     * guest external interrupt source is selected), so one extra element is
+     * needed to be able to index owners[] by the ID directly.
+     */
+    vgein->owners = xvzalloc_array(struct vcpu *, vgein->geilen + 1);
+    if ( !vgein->owners )
+        return -ENOMEM;
+
     spin_lock_init(&vgein->lock);
 
     return 0;
+}
+
+static void vgein_deinit(unsigned int cpu)
+{
+    struct vgein_ctrl *vgein = &per_cpu(vgein, cpu);
+
+    XVFREE(vgein->owners);
+    vgein->bmp = 0;
+    vgein->geilen = 0;
 }
 
 static int cf_check cpu_callback(struct notifier_block *nfb, unsigned long action,
@@ -94,6 +114,11 @@ static int cf_check cpu_callback(struct notifier_block *nfb, unsigned long actio
         rc = vgein_init(cpu);
         if ( rc )
             printk("AIA: failed to init vgein for CPU%u\n", cpu);
+        break;
+
+    case CPU_UP_CANCELED:
+    case CPU_DEAD:
+        vgein_deinit(cpu);
         break;
     }
 
@@ -157,7 +182,10 @@ unsigned int vgein_assign(struct vcpu *v)
     if ( vgein_id > vgein->geilen )
         vgein_id = 0;
     else
+    {
         __set_bit(vgein_id, bmp);
+        vgein->owners[vgein_id] = v;
+    }
 
     spin_unlock_irqrestore(&vgein->lock, flags);
 
@@ -179,10 +207,44 @@ void vgein_release(struct vcpu *v, unsigned int vgein_id)
 
     spin_lock_irqsave(&vgein->lock, flags);
     __clear_bit(vgein_id, &vgein->bmp);
+    vgein->owners[vgein_id] = NULL;
     spin_unlock_irqrestore(&vgein->lock, flags);
 
 #ifdef VGEIN_DEBUG
     gprintk(XENLOG_DEBUG, "%s: vgein_id(%u), xen_cpu%u_bmp=%#lx\n",
            __func__, vgein_id, v->processor, vgein->bmp);
 #endif
+}
+
+void hgei_interrupt(void)
+{
+    unsigned long hgei_mask, flags;
+    struct vgein_ctrl *vgein = &this_cpu(vgein);
+
+    hgei_mask = csr_read(CSR_HGEIP) & csr_read(CSR_HGEIE);
+    csr_clear(CSR_HGEIE, hgei_mask);
+
+    spin_lock_irqsave(&vgein->lock, flags);
+
+    for_each_set_bit ( guest_file_id, hgei_mask )
+    {
+        /*
+         * guest_file_id shouldn't be zero, as it will indicate that no
+         * guest external interrupt source is selected for VS-level external
+         * interrupts.
+         */
+        ASSERT(guest_file_id);
+
+        if ( vgein->owners[guest_file_id] )
+        {
+#ifdef VGEIN_DEBUG
+            gprintk(XENLOG_DEBUG, "%s: kick ->%pv, hgei_mask(%#lx)\n",
+                    __func__, vgein->owners[guest_file_id], hgei_mask);
+#endif
+
+            vcpu_kick(vgein->owners[guest_file_id]);
+        }
+    }
+
+    spin_unlock_irqrestore(&vgein->lock, flags);
 }
