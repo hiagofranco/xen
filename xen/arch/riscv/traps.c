@@ -12,9 +12,10 @@
 #include <xen/sched.h>
 #include <xen/softirq.h>
 
-#include <asm/extable.h>
+#include <asm/aia.h>
 #include <asm/cpufeature.h>
 #include <asm/emulate.h>
+#include <asm/extable.h>
 #include <asm/intc.h>
 #include <asm/processor.h>
 #include <asm/riscv_encoding.h>
@@ -271,6 +272,10 @@ void do_trap(struct cpu_user_regs *cpu_regs)
 
             case IRQ_S_TIMER:
                 timer_interrupt();
+                break;
+
+            case IRQ_S_GEXT:
+                hgei_interrupt();
                 break;
 
             default:

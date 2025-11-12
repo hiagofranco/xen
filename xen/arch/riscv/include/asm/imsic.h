@@ -103,6 +103,9 @@ unsigned int vcpu_guest_file_id(const struct vcpu *v);
 
 int vimsic_make_domu_dt_node(struct kernel_info *kinfo, unsigned int *phandle);
 
+void cf_check imsic_ctxt_switch_from(struct vcpu *p);
+void cf_check imsic_ctxt_switch_to(struct vcpu *n);
+
 int imsic_map_guest_file(struct vcpu *v, unsigned int vsfile_id);
 
 void imsic_vsfile_attach(struct vcpu *v);

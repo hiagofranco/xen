@@ -617,6 +617,12 @@ static const struct mmio_handler_ops vaplic_mmio_ops = {
 static const struct vintc_ops vintc_ops = {
     .vcpu_init = vcpu_imsic_init,
     .vcpu_deinit = vcpu_imsic_deinit,
+    /*
+     * MSI delivery is the only supported mode, so the vAPLIC state to save
+     * and restore is always the IMSIC one.
+     */
+    .ctxt_switch_from = imsic_ctxt_switch_from,
+    .ctxt_switch_to = imsic_ctxt_switch_to,
 };
 
 int domain_vaplic_init(struct domain *d)

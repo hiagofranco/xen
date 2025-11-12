@@ -68,6 +68,7 @@ struct arch_vcpu {
     register_t hstateen0;
     uint64_t   htimedelta;
     register_t hvip;
+    register_t hie;
 
     register_t vsatp;
     register_t vscause;

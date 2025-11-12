@@ -20,6 +20,7 @@
 #include <xen/init.h>
 #include <xen/libfdt/libfdt.h>
 #include <xen/macros.h>
+#include <xen/rwlock.h>
 #include <xen/sched.h>
 #include <xen/smp.h>
 #include <xen/spinlock.h>
@@ -385,6 +386,71 @@ static int __init imsic_parse_node(const struct dt_device_node *node,
     } while ( !dt_device_get_address(node, *nr_mmios, &base_addr, NULL) );
 
     return 0;
+}
+
+void cf_check imsic_ctxt_switch_from(struct vcpu *p)
+{
+    struct vimsic_state *imsic_state = p->arch.vimsic_state;
+    unsigned long flags;
+
+    /*
+     * A vCPU using the s/w IMSIC VS-file (guest_file_id == 0) has no h/w
+     * VS-file bound to a physical CPU, so there is nothing to observe.
+     */
+    if ( !vcpu_guest_file_id(p) )
+        return;
+
+    read_lock_irqsave(&imsic_state->vsfile_lock, flags);
+
+    /*
+     * The file may still belong to another pCPU. Its bit in this pCPU's
+     * HGEIE would name a file of this pCPU, so leave HGEIE alone.
+     */
+    if ( imsic_state->vsfile_cpu != smp_processor_id() )
+    {
+        read_unlock_irqrestore(&imsic_state->vsfile_lock, flags);
+        return;
+    }
+
+    /*
+     * Start to observe the VS-file from HS-mode. HGEIP reports a
+     * pending-and-enabled interrupt of the VS-file whether the vCPU runs or
+     * not, but once it is switched out hstatus.VGEIN no longer selects the
+     * file, so the interrupt isn't delivered to VS-mode. Setting the file's
+     * bit in HGEIE turns it into an SGEI instead, which lets Xen wake the
+     * vCPU up.
+     *
+     * An MSI is recorded in the VS-file's eip[] array until the guest claims
+     * it, and HGEIP isn't latched but reflects whether the file currently
+     * has a pending-and-enabled interrupt. Hence an interrupt which arrived
+     * before this point raises an SGEI as soon as the bit is set in HGEIE;
+     * nothing is lost in between.
+     */
+    csr_set(CSR_HGEIE, BIT(imsic_state->guest_file_id, UL));
+
+    read_unlock_irqrestore(&imsic_state->vsfile_lock, flags);
+}
+
+void cf_check imsic_ctxt_switch_to(struct vcpu *n)
+{
+    struct vimsic_state *imsic_state = n->arch.vimsic_state;
+    unsigned long flags;
+
+    /* A s/w VS-file is never observed through HGEIP. */
+    if ( !vcpu_guest_file_id(n) )
+        return;
+
+    /*
+     * The vCPU is about to run, so hstatus.VGEIN delivers the VS-file's
+     * interrupts to it directly and there is nothing left for Xen to observe.
+     *
+     * The file may still belong to another pCPU. Its bit in this pCPU's
+     * HGEIE would name a file of this pCPU, so leave HGEIE alone.
+     */
+    read_lock_irqsave(&imsic_state->vsfile_lock, flags);
+    if ( imsic_state->vsfile_cpu == smp_processor_id() )
+        csr_clear(CSR_HGEIE, BIT(imsic_state->guest_file_id, UL));
+    read_unlock_irqrestore(&imsic_state->vsfile_lock, flags);
 }
 
 /*

@@ -18,6 +18,13 @@ struct vgein_ctrl {
     /* The least-significant bits are implemented first, apart from bit 0 */
     unsigned long bmp;
     spinlock_t lock;
+    /*
+     * Guest interrupt file IDs run from 1 to geilen inclusive (0 means that
+     * no guest external interrupt source is selected), and geilen can never
+     * exceed BITS_PER_LONG - 1, so indexing this array by the ID directly
+     * always fits.
+     */
+    struct vcpu *owners[BITS_PER_LONG];
     unsigned int geilen;
 };
 
@@ -138,7 +145,10 @@ unsigned int vgein_assign(struct vcpu *v)
     if ( vgein_id > vgein->geilen )
         vgein_id = 0;
     else
+    {
         __set_bit(vgein_id, bmp);
+        vgein->owners[vgein_id] = v;
+    }
 
     spin_unlock_irqrestore(&vgein->lock, flags);
 
@@ -161,10 +171,33 @@ void vgein_release(struct vcpu *v, unsigned int vgein_id, unsigned int cpu)
     spin_lock_irqsave(&vgein->lock, flags);
     if ( !__test_and_clear_bit(vgein_id, &vgein->bmp) )
         ASSERT_UNREACHABLE();
+    ASSERT(vgein->owners[vgein_id] == v);
+    vgein->owners[vgein_id] = NULL;
     spin_unlock_irqrestore(&vgein->lock, flags);
 
 #ifdef VGEIN_DEBUG
     gprintk(XENLOG_DEBUG, "%s: %pv: vgein_id(%u), xen_cpu%u_bmp=%#lx\n",
             __func__, v, vgein_id, cpu, vgein->bmp);
 #endif
+}
+
+void hgei_interrupt(void)
+{
+    unsigned long hgei_mask, flags;
+    struct vgein_ctrl *vgein = &this_cpu(vgein);
+
+    hgei_mask = csr_read(CSR_HGEIP);
+    hgei_mask &= csr_read(CSR_HGEIE);
+
+    csr_clear(CSR_HGEIE, hgei_mask);
+
+    spin_lock_irqsave(&vgein->lock, flags);
+
+    for_each_set_bit ( guest_file_id, hgei_mask )
+    {
+        if ( vgein->owners[guest_file_id] )
+            vcpu_kick(vgein->owners[guest_file_id]);
+    }
+
+    spin_unlock_irqrestore(&vgein->lock, flags);
 }

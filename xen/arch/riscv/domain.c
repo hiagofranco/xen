@@ -251,6 +251,12 @@ static void vcpu_csr_init(struct vcpu *v)
         v->arch.hstateen0 = (hstateen0 & csr_masks.hstateen0) |
                             csr_masks.ro_one.hstateen0;
     }
+
+    /*
+     * Enable SGEIs, so that a guest interrupt file marked in HGEIE while
+     * the vCPU is descheduled can raise an interrupt to Xen.
+     */
+    v->arch.hie = BIT(IRQ_S_GEXT, UL);
 }
 
 static void schedule_tail(struct vcpu *prev);
@@ -498,10 +504,12 @@ static bool vcpu_can_access_vsiselect(const struct vcpu *v)
 static void csrs_ctxt_switch_from(struct vcpu *p)
 {
     /*
-     * hedeleg, hideleg, henvcfg, hcounteren, htimedelta and hstateen0 aren't
-     * saved: neither the guest nor Xen changes them other than by
+     * hedeleg, hideleg, hie, henvcfg, hcounteren, htimedelta and hstateen0
+     * aren't saved: neither the guest nor Xen changes them other than by
      * csrs_ctxt_switch_to() writing them from v->arch.*, which is left
-     * unchanged after vcpu_csr_init().
+     * unchanged after vcpu_csr_init(). The exception are the VS-level bits
+     * of hie, which alias bits of vsie: the guest changes them through vsie,
+     * and they are saved and restored as part of it.
      */
 
     p->arch.hvip = csr_read(CSR_HVIP);
@@ -523,6 +531,7 @@ static void csrs_ctxt_switch_to(struct vcpu *n)
     csr_write(CSR_HEDELEG, n->arch.hedeleg);
     csr_write(CSR_HIDELEG, n->arch.hideleg);
     csr_write(CSR_HVIP, n->arch.hvip);
+    csr_write(CSR_HIE, n->arch.hie);
     csr_write64(HENVCFG, n->arch.henvcfg);
     csr_write(CSR_HCOUNTEREN, n->arch.hcounteren);
     csr_write64(HTIMEDELTA, n->arch.htimedelta);
@@ -531,6 +540,10 @@ static void csrs_ctxt_switch_to(struct vcpu *n)
         csr_write(CSR_HSTATEEN0, n->arch.hstateen0);
 
     csr_write(CSR_VSSTATUS, n->arch.vsstatus);
+    /*
+     * Has to come after hideleg and hie: the bits of vsie delegated by
+     * hideleg alias the VS-level bits of hie, which n->arch.hie has clear.
+     */
     csr_write64(VSIE, n->arch.vsie);
     csr_write(CSR_VSTVEC, n->arch.vstvec);
     csr_write(CSR_VSSCRATCH, n->arch.vsscratch);
