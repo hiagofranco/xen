@@ -873,6 +873,7 @@
 #define INSN_OPCODE_MASK		0x7f
 #define INSN_OPCODE_LOAD		0x03
 #define INSN_OPCODE_STORE		0x23
+#define INSN_OPCODE_SYSTEM		0x73
 
 #define INSN_IS_16BIT(insn)	(((insn) & 3) != 3)
 #define INSN_IS_32BIT(insn)	(!INSN_IS_16BIT(insn) && ((insn) & 0x1c) != 0x1c)

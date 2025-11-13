@@ -6,6 +6,7 @@
 
 #include <xen/bug.h>
 #include <xen/errno.h>
+#include <xen/lib.h>
 #include <xen/sched.h>
 #include <xen/types.h>
 
@@ -579,4 +580,139 @@ void handle_guest_page_fault(struct cpu_user_regs *regs, unsigned long cause)
         domain_crash(current->domain,
                      "unable to handle guest page fault (cause=%#lx) at gpa %#"PRIpaddr"\n",
                      cause, gf.gpa);
+}
+
+static int truly_illegal_insn(const struct vcpu *v, const unsigned long insn)
+{
+    const struct cpu_user_regs *regs = vcpu_guest_cpu_user_regs(v);
+    struct trap_info utrap = {};
+
+    /* Redirect trap to Guest vCPU */
+    utrap.sepc = regs->sepc;
+    utrap.scause = CAUSE_ILLEGAL_INSTRUCTION;
+    utrap.stval = insn;
+    trap_redirect(&utrap);
+
+    return 0;
+}
+
+/*
+ * Positive return values of an insn_func handler tell system_opcode_insn()
+ * what to do once the instruction has been emulated; a negative value is an
+ * error which aborts the emulation.
+ */
+#define INSN_ILLEGAL_TRAP       1
+#define INSN_CONTINUE_NEXT_SEPC 2
+
+struct insn_func {
+    unsigned long mask;
+    unsigned long match;
+    int (*func)(struct vcpu *v, unsigned long insn);
+};
+
+static int wfi_insn(struct vcpu *v, unsigned long insn)
+{
+    /* Emulate wait for interrupt (WFI) behaviour. */
+    if ( vcpu_runnable(v) && (v->runstate.state == RUNSTATE_running) &&
+         !vcpu_has_interrupts(v, ~0ULL) )
+    {
+        vcpu_block();
+    }
+
+    return INSN_CONTINUE_NEXT_SEPC;
+}
+
+static const struct insn_func system_opcode_funcs[] = {
+    {
+        .mask  = INSN_MASK_WFI,
+        .match = INSN_MATCH_WFI,
+        .func  = wfi_insn,
+    },
+};
+
+static int system_opcode_insn(struct vcpu *v, unsigned long insn)
+{
+    struct cpu_user_regs *regs = vcpu_guest_cpu_user_regs(v);
+    int rc = INSN_ILLEGAL_TRAP;
+
+    for ( unsigned int i = 0; i < ARRAY_SIZE(system_opcode_funcs); i++ )
+    {
+        const struct insn_func *ifn = &system_opcode_funcs[i];
+
+        if ( (insn & ifn->mask) == ifn->match )
+        {
+            rc = ifn->func(v, insn);
+            break;
+        }
+    }
+
+    switch ( rc )
+    {
+    case INSN_ILLEGAL_TRAP:
+        return truly_illegal_insn(v, insn);
+
+    case INSN_CONTINUE_NEXT_SEPC:
+        regs->sepc += INSN_LEN(insn);
+        break;
+
+    default:
+        break;
+    }
+
+    return rc <= 0 ? rc : 0;
+}
+
+int handle_virt_instruction_fault(struct vcpu *v)
+{
+    const struct cpu_user_regs *regs = vcpu_guest_cpu_user_regs(v);
+    unsigned long insn = csr_read(CSR_STVAL);
+
+    /*
+     * According to the RISC-V Privileged Architecture spec:
+     *  The stval register can optionally also be used to return the
+     *  faulting instruction bits on an illegal-instruction exception
+     *  (sepc points to the faulting instruction in memory). If stval is
+     *   written with a nonzero value when an illegal-instruction exception
+     *   occurs, then stval will contain the shortest of:
+     *    - the actual faulting instruction
+     *    - the first ILEN bits of the faulting instruction
+     *    - the first SXLEN bits of the faulting instruction
+     *
+     * So a value of zero in stval signifies either that the feature is not
+     * supported, or an illegal zero instruction was fetched. To verify
+     * that it is needed to read an instruction directly from memory.
+     */
+    if ( !insn )
+    {
+        struct trap_info utrap = {};
+
+        insn = read_guest(regs->sepc, true, &utrap);
+        if ( utrap.scause )
+        {
+            if ( utrap.scause == CAUSE_LOAD_GUEST_PAGE_FAULT )
+                return 0;
+
+            trap_redirect(&utrap);
+
+            return 0;
+        }
+    }
+
+    /*
+     * The 16-bit Compressed ISA (RVC) primarily consists of unprivileged
+     * operations such as basic arithmetic, register moves, and simplified
+     * load/store or jump instructions (e.g., C.ADDI, C.LWSP, C.J). These are
+     * not relevant to the hypervisor and should be handled by the guest itself.
+     */
+    if ( INSN_IS_16BIT(insn) )
+        return truly_illegal_insn(v, insn);
+
+    switch ( insn & INSN_OPCODE_MASK )
+    {
+    case INSN_OPCODE_SYSTEM:
+        return system_opcode_insn(v, insn);
+
+    default:
+        return truly_illegal_insn(v, insn);
+    }
 }
