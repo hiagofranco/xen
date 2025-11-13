@@ -51,6 +51,8 @@ struct csr_masks {
 
 #define HIDELEG_DEFAULT (MIP_VSSIP | MIP_VSTIP | MIP_VSEIP)
 
+#define HSTATUS_DEFAULT (HSTATUS_SPV | HSTATUS_SPVP | HSTATUS_VTW)
+
 static struct csr_masks __ro_after_init csr_masks;
 
 #define HEDELEG_VALID_MASK ULONG_MAX
@@ -218,7 +220,7 @@ static void vcpu_csr_init(struct vcpu *v)
      * kernel_probe() reads the guest kernel header, so the domain's type,
      * and hence the guest's XLEN, is not known yet.
      */
-    vcpu_guest_cpu_user_regs(v)->hstatus = HSTATUS_SPV | HSTATUS_SPVP;
+    vcpu_guest_cpu_user_regs(v)->hstatus = HSTATUS_DEFAULT;
 
     v->arch.hideleg = HIDELEG_DEFAULT & csr_masks.hideleg;
 

@@ -261,6 +261,19 @@ void do_trap(struct cpu_user_regs *cpu_regs)
         handle_guest_page_fault(cpu_regs, cause);
         break;
 
+    case CAUSE_VIRTUAL_INST_FAULT:
+    {
+        int ret;
+
+        BUG_ON(!from_guest);
+
+        ret = handle_virt_instruction_fault(current);
+        if ( ret < 0 )
+            domain_crash(current->domain,
+                         "Couldn't handle CAUSE_VIRTUAL_INST_FAULT: %d\n", ret);
+        break;
+    }
+
     case CAUSE_ILLEGAL_INSTRUCTION:
         if ( do_bug_frame(cpu_regs, pc) >= 0 )
         {
