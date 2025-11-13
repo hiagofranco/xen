@@ -31,6 +31,8 @@ unsigned long riscv_vcpu_unpriv_read(bool read_insn,
                                      unsigned long guest_addr,
                                      struct trap_info *trap);
 
+void riscv_vcpu_trap_redirect(const struct trap_info *trap);
+
 #endif /* ASM__RISCV__GUEST_ACCESS_H */
 /*
  * Local variables:
