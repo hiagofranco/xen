@@ -475,6 +475,92 @@ static void handle_guest_page_fault(unsigned long cause,
                      addr);
 }
 
+static int truly_illegal_insn(struct vcpu *v, const unsigned long insn)
+{
+    struct trap_info utrap = { 0 };
+
+    /* Redirect trap to Guest VCPU */
+    utrap.sepc = vcpu_guest_cpu_user_regs(v)->sepc;
+    utrap.scause = CAUSE_ILLEGAL_INSTRUCTION;
+    utrap.stval = insn;
+    riscv_vcpu_trap_redirect(&utrap);
+
+    return 0;
+}
+
+static int system_opcode_insn(struct vcpu *v, unsigned long insn)
+{
+    if ( (insn & INSN_MASK_WFI) == INSN_MATCH_WFI )
+    {
+        /* Emulate wait for interrupt (WFI) behaviour. */
+        if ( vcpu_runnable(v) && (v->runstate.state == RUNSTATE_running) &&
+             !vcpu_has_interrupts(v, _UL(-1)) )
+        {
+            vcpu_block();
+        }
+
+        vcpu_guest_cpu_user_regs(v)->sepc += INSN_LEN(insn);
+
+        return 0;
+    }
+
+    return truly_illegal_insn(v, insn);
+}
+
+static int handle_virt_instruction_fault(struct vcpu *v)
+{
+    unsigned long insn = csr_read(CSR_STVAL);
+
+    /*
+     * According to the RISC-V Privileged Architecture spec:
+     *  The stval register can optionally also be used to return the
+     *  faulting instruction bits on an illegal-instruction exception
+     *  (sepc points to the faulting instruction in memory). If stval is
+     *   written with a nonzero value when an illegal-instruction exception
+     *   occurs, then stval will contain the shortest of:
+     *    - the actual faulting instruction
+     *    - the first ILEN bits of the faulting instruction
+     *    - the first SXLEN bits of the faulting instruction
+     *
+     * So a value of zero in stval signifies either that the feature is not
+     * supported, or an illegal zero instruction was fetched. To verify
+     * that it is needed to read an instruction directly from memory.
+     */
+    if ( insn == 0 )
+    {
+        struct trap_info utrap = { 0 };
+
+        insn = riscv_vcpu_unpriv_read(true, vcpu_guest_cpu_user_regs(current)->sepc, &utrap);
+        if ( utrap.scause )
+        {
+            if ( is_load_guest_page_fault(utrap.scause) )
+                return 0;
+
+            riscv_vcpu_trap_redirect(&utrap);
+
+            return 0;
+        }
+    }
+
+    /*
+     * The 16-bit Compressed ISA (RVC) primarily consists of unprivileged
+     * operations such as basic arithmetic, register moves, and simplified
+     * load/store or jump instructions (e.g., C.ADDI, C.LWSP, C.J). These are
+     * not relevant to the hypervisor and should be handled by the guest itself.
+     */
+    if ( GET_INSN_LENGTH(insn) == 2 )
+        return truly_illegal_insn(v, insn);
+
+    switch ( (insn & INSN_OPCODE_MASK) >> INSN_OPCODE_SHIFT )
+    {
+    case INSN_OPCODE_SYSTEM:
+        return system_opcode_insn(v, insn);
+
+    default:
+        return truly_illegal_insn(v, insn);
+    }
+}
+
 void do_trap(struct cpu_user_regs *cpu_regs)
 {
     register_t pc = cpu_regs->sepc;
@@ -493,6 +579,20 @@ void do_trap(struct cpu_user_regs *cpu_regs)
     case CAUSE_STORE_GUEST_PAGE_FAULT:
         handle_guest_page_fault(cause, cpu_regs);
         break;
+
+    case CAUSE_VIRTUAL_INST_FAULT:
+    {
+        int ret;
+
+        BUG_ON(!(cpu_regs->hstatus & HSTATUS_SPV));
+
+        ret = handle_virt_instruction_fault(current);
+        if ( ret < 0 )
+            /* TODO: crash only domain instead of Xen? */
+            /* domain_crash(current->domain); */
+            panic("couldn't handle CAUSE_VIRTUAL_INST_FAULT: %d\n", ret);
+        break;
+    }
 
     case CAUSE_ILLEGAL_INSTRUCTION:
         if ( do_bug_frame(cpu_regs, pc) >= 0 )

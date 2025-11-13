@@ -12,6 +12,10 @@
 #define _UL(X) _AC(X, UL)
 #define _ULL(X) _AC(X, ULL)
 
+#define INSN_OPCODE_MASK       _UL(0x007c)
+#define INSN_OPCODE_SHIFT      2
+#define INSN_OPCODE_SYSTEM     28
+
 /* clang-format off */
 #define MSTATUS_SIE			_UL(0x00000002)
 #define MSTATUS_MIE			_UL(0x00000008)
