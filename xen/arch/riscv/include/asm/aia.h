@@ -19,4 +19,6 @@ void vcpu_aia_init(struct vcpu *v);
 
 void hgei_interrupt(void);
 
+bool vcpu_aia_has_interrupts(const struct vcpu *vcpu, uint64_t mask);
+
 #endif /* RISCV_AIA_H */

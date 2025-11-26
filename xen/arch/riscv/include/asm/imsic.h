@@ -113,4 +113,6 @@ int imsic_map_guest_file(struct vcpu *v, unsigned int vsfile_id);
 void imsic_state_save(struct vcpu *v);
 void imsic_state_restore(struct vcpu *v);
 
+bool imsic_has_interrupt(const struct vcpu *vcpu);
+
 #endif /* ASM_RISCV_IMSIC_H */

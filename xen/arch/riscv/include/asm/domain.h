@@ -147,6 +147,7 @@ static inline void arch_vcpu_block(struct vcpu *v) {}
 
 int vcpu_set_interrupt(struct vcpu *v, unsigned int irq);
 int vcpu_unset_interrupt(struct vcpu *v, unsigned int irq);
+bool vcpu_has_interrupts(const struct vcpu *v, const uint64_t mask);
 
 void vcpu_sync_interrupts(struct vcpu *curr);
 void vcpu_flush_interrupts(struct vcpu *curr);

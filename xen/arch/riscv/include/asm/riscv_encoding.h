@@ -91,6 +91,14 @@
 #define IRQ_M_EXT			11
 #define IRQ_S_GEXT			12
 #define IRQ_PMU_OVF			13
+#define IRQ_LOCAL_MAX		(IRQ_PMU_OVF + 1)
+#define IRQ_LOCAL_MASK		GENMASK((IRQ_LOCAL_MAX - 1), 0)
+
+/* VSIP & HVIP relation */
+#define VSIP_TO_HVIP_SHIFT	(IRQ_VS_SOFT - IRQ_S_SOFT)
+#define VSIP_VALID_MASK		((_UL(1) << IRQ_S_SOFT) | \
+							(_UL(1) << IRQ_S_TIMER) | \
+							(_UL(1) << IRQ_S_EXT))
 
 #define MIP_SSIP			(_UL(1) << IRQ_S_SOFT)
 #define MIP_VSSIP			(_UL(1) << IRQ_VS_SOFT)

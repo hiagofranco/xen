@@ -4,6 +4,7 @@
 #include <xen/cpu.h>
 #include <xen/errno.h>
 #include <xen/init.h>
+#include <xen/sched.h>
 #include <xen/sections.h>
 #include <xen/sched.h>
 #include <xen/spinlock.h>
@@ -248,4 +249,25 @@ void hgei_interrupt(void)
     }
 
     spin_unlock_irqrestore(&vgein->lock, flags);
+}
+
+bool vcpu_aia_has_interrupts(const struct vcpu *vcpu, uint64_t mask)
+{
+    unsigned long seip;
+
+    if ( !aia_usable() )
+        return false;
+
+#ifdef CONFIG_RISCV_32
+    #error "add support of RISCV32 for vcpu_aia_has_interrups()"
+#endif
+
+    seip = vcpu->arch.vsie;
+    seip &= (unsigned long)mask;
+    seip &= BIT(IRQ_S_EXT, UL);
+
+    if ( !seip )
+        return false;
+
+    return imsic_has_interrupt(vcpu);
 }

@@ -277,6 +277,13 @@ void vcpu_sync_interrupts(struct vcpu *curr)
 
     ASSERT(curr == current);
 
+    /*
+     * v->arch.vsie is later used to check whether a vCPU has interrupts
+     * pending. Therefore, it should be kept up to date at all times,
+     * not only during context switches.
+     */
+    curr->arch.vsie = csr_read(CSR_VSIE);
+
     /* Sync-up HVIP.VSSIP bit changes done by Guest */
     if ( ((curr->arch.hvip ^ hvip) & BIT(IRQ_VS_SOFT, UL)) &&
          !test_and_set_bit(IRQ_VS_SOFT, &curr->arch.irqs_pending_mask) )
@@ -286,6 +293,16 @@ void vcpu_sync_interrupts(struct vcpu *curr)
         else
             clear_bit(IRQ_VS_SOFT, &curr->arch.irqs_pending);
     }
+
+#ifdef CONFIG_RISCV_32
+    /*
+     * Sync-up AIA high interrupts.
+     *
+     * It is necessary to do only for CONFIG_RISCV_32 which isn't supported
+     * now.
+     */
+#   error "Update v->arch.vsieh"
+#endif
 }
 
 void vcpu_flush_interrupts(struct vcpu *curr)
@@ -608,6 +625,32 @@ void continue_running(struct vcpu *same)
 void arch_domain_unpause(struct domain *d)
 {
     /* Nothing to do */
+}
+
+bool vcpu_has_interrupts(const struct vcpu *v, uint64_t mask)
+{
+    unsigned long ie;
+
+   /*
+    * This handles the asymmetric layout of RISC-V interrupt registers where
+    * local interrupt bits occupy different bit positions in vsie/vsip versus
+    * hvip.
+    * The shift is a register-layout translation: converting interrupt enable
+    * bits from guest-visible (vsip) positions into hypervisor-injection (hvip)
+    * positions, so the pending-interrupt bitmap can be checked with a single
+    * bitwise AND regardless of which view the bit came from. This produces a
+    * mask in hvip-space, which can then be compared against irqs_pending[0]
+    * which tracks pending interrupts in the hypervisor's view of the world.
+    */
+    ie = ((v->arch.vsie & VSIP_VALID_MASK) << VSIP_TO_HVIP_SHIFT) &
+         (unsigned long)mask;
+    ie |= v->arch.vsie & ~IRQ_LOCAL_MASK & (unsigned long)mask;
+
+    if ( ACCESS_ONCE(v->arch.irqs_pending[0]) &  ie )
+        return true;
+
+    /* Check AIA high interrupts */
+    return vcpu_aia_has_interrupts(v, mask);
 }
 
 static void __init __maybe_unused build_assertions(void)
