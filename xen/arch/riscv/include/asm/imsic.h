@@ -152,4 +152,6 @@ int vcpu_imsic_inject(const struct vcpu *v, unsigned int iid);
 
 void vcpu_imsic_aplic_barrier(const struct vcpu *v);
 
+bool imsic_has_interrupt(const struct vcpu *vcpu);
+
 #endif /* RISCV_IMSIC_H */

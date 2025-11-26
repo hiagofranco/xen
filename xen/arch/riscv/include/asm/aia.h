@@ -14,4 +14,6 @@ void vgein_release(struct vcpu *v, unsigned int vgein_id, unsigned int cpu);
 
 void hgei_interrupt(void);
 
+bool vcpu_aia_has_interrupts(const struct vcpu *vcpu, uint64_t mask);
+
 #endif /* RISCV_AIA_H */

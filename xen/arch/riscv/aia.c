@@ -13,6 +13,7 @@
 #include <asm/cpufeature.h>
 #include <asm/csr.h>
 #include <asm/current.h>
+#include <asm/imsic.h>
 
 struct vgein_ctrl {
     /* The least-significant bits are implemented first, apart from bit 0 */
@@ -200,4 +201,25 @@ void hgei_interrupt(void)
     }
 
     spin_unlock_irqrestore(&vgein->lock, flags);
+}
+
+bool vcpu_aia_has_interrupts(const struct vcpu *vcpu, uint64_t mask)
+{
+    unsigned long seip;
+
+    if ( !aia_usable() )
+        return false;
+
+#ifdef CONFIG_RISCV_32
+    #error "add support of RISCV32 for vcpu_aia_has_interrups()"
+#endif
+
+    seip = vcpu->arch.vsie;
+    seip &= (unsigned long)mask;
+    seip &= BIT(IRQ_S_EXT, UL);
+
+    if ( !seip )
+        return false;
+
+    return imsic_has_interrupt(vcpu);
 }
