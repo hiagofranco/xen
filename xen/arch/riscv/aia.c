@@ -17,6 +17,7 @@
 #include <asm/csr.h>
 #include <asm/current.h>
 #include <asm/imsic.h>
+#include <asm/riscv_encoding.h>
 
 struct vgein_ctrl {
     unsigned long bmp;
@@ -66,6 +67,20 @@ void vcpu_aia_init(struct vcpu *v)
         MASK_INSR(new_vsfile_id, HSTATUS_VGEIN);
 
     imsic_update_state(v, new_vsfile_id);
+}
+
+static inline unsigned long aia_hvictl_value(bool ext_irq_pending)
+{
+    unsigned long hvictl;
+
+    /*
+     * HVICTL.IID == 9 and HVICTL.IPRIO == 0 represents
+     * no interrupt in HVICTL.
+     */
+
+    hvictl = MASK_INSR(IRQ_S_EXT, HVICTL_IID_MASK);
+    hvictl |= ext_irq_pending;
+    return hvictl;
 }
 
 static int vgein_init(unsigned int cpu)
@@ -270,4 +285,16 @@ bool vcpu_aia_has_interrupts(const struct vcpu *vcpu, uint64_t mask)
         return false;
 
     return imsic_has_interrupt(vcpu);
+}
+
+void vcpu_aia_update_hvip(const struct vcpu *v)
+{
+    if ( !aia_usable() )
+        return;
+
+#ifdef CONFIG_RISCV_32
+    #error "update hviph"
+#endif
+
+    csr_write(CSR_HVICTL, aia_hvictl_value(!!(v->arch.hvip & BIT(IRQ_VS_EXT, UL))));
 }

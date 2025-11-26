@@ -296,15 +296,8 @@ void vcpu_sync_interrupts(struct vcpu *curr)
             clear_bit(IRQ_VS_SOFT, &curr->arch.irqs_pending);
     }
 
-#ifdef CONFIG_RISCV_32
-    /*
-     * Sync-up AIA high interrupts.
-     *
-     * It is necessary to do only for CONFIG_RISCV_32 which isn't supported
-     * now.
-     */
-#   error "Update v->arch.vsieh"
-#endif
+    /* Sync-up AIA high interrupts */
+    vcpu_aia_sync_interrupts(curr);
 }
 
 void vcpu_flush_interrupts(struct vcpu *curr)
@@ -323,15 +316,10 @@ void vcpu_flush_interrupts(struct vcpu *curr)
         csr_write(CSR_HVIP, *hvip);
     }
 
-#ifdef CONFIG_RISCV_32
-    /*
-     * Flush AIA high interrupts.
-     *
-     * It is necessary to do only for CONFIG_RISCV_32 which isn't
-     * supported now.
-     */
-#   error "Update v->arch.hviph"
-#endif
+    /* Flush AIA high interrupts */
+    vcpu_aia_flush_interrupts(curr);
+
+    vcpu_aia_update_hvip(curr);
 }
 
 void vcpu_kick(struct vcpu *v)
