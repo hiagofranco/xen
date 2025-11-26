@@ -108,6 +108,8 @@
 							(_UL(1) << IRQ_S_TIMER) | \
 							(_UL(1) << IRQ_S_EXT))
 
+#define HVICTL_IID_MASK		GENMASK(27, 16)
+
 #define MIP_SSIP			(_UL(1) << IRQ_S_SOFT)
 #define MIP_VSSIP			(_UL(1) << IRQ_VS_SOFT)
 #define MIP_MSIP			(_UL(1) << IRQ_M_SOFT)
