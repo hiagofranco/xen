@@ -173,6 +173,25 @@ static void imsic_eix_set64(unsigned int ireg, uint64_t val)
         imsic_vs_csr_set(ireg + 1, val >> 32);
 }
 
+bool imsic_has_interrupt(const struct vcpu *vcpu)
+{
+    struct vimsic_state *imsic_state = vcpu->arch.vimsic_state;
+    unsigned long flags;
+    bool ret = false;
+
+    /*
+     * The IMSIC SW-file directly injects interrupt via hvip so
+     * only check for interrupt when IMSIC VS-file is being used.
+     */
+
+    read_lock_irqsave(&imsic_state->vsfile_lock, flags);
+    if ( imsic_state->vsfile_cpu != CPU_NONE )
+        ret = !!(csr_read(CSR_HGEIP) & BIT(imsic_state->guest_file_id, UL));
+    read_unlock_irqrestore(&imsic_state->vsfile_lock, flags);
+
+    return ret;
+}
+
 unsigned int vcpu_guest_file_id(const struct vcpu *v)
 {
     return ACCESS_ONCE(v->arch.vimsic_state->guest_file_id);
