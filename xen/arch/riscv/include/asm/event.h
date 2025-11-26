@@ -4,6 +4,8 @@
 
 #include <xen/lib.h>
 
+#include <asm/aia.h>
+
 void vcpu_mark_events_pending(struct vcpu *v);
 
 static inline int vcpu_event_delivery_is_enabled(struct vcpu *v)
@@ -14,8 +16,7 @@ static inline int vcpu_event_delivery_is_enabled(struct vcpu *v)
 
 static inline int local_events_need_delivery(void)
 {
-    BUG_ON("unimplemented");
-    return 0;
+    return vcpu_has_interrupts(current, -1UL);
 }
 
 static inline void local_event_delivery_enable(void)
