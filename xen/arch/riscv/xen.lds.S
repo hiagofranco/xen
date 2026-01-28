@@ -137,7 +137,7 @@ SECTIONS
         *(.got.plt)
     } : text
 
-    . = ALIGN(POINTER_ALIGN);
+    . = ALIGN(PAGE_SIZE);
     __init_end = .;
 
     .bss : {                     /* BSS */
