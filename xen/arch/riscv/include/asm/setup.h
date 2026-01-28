@@ -13,6 +13,8 @@ void init_csr_masks(void);
 
 void init_hstatus_vsxl_settable_mask(void);
 
+void modify_after_init_mappings(void);
+
 #endif /* RISCV_SETUP_H */
 
 /*

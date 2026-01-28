@@ -19,6 +19,7 @@
 #include <xen/static-evtchn.h>
 #include <xen/tasklet.h>
 #include <xen/timer.h>
+#include <xen/virtual_region.h>
 #include <xen/vmap.h>
 #include <xen/xvmalloc.h>
 
@@ -29,6 +30,7 @@
 #include <asm/early_printk.h>
 #include <asm/fixmap.h>
 #include <asm/intc.h>
+#include <asm/page.h>
 #include <asm/p2m.h>
 #include <asm/sbi.h>
 #include <asm/setup.h>
@@ -85,6 +87,20 @@ static void __init remove_early_mappings(void)
                               BOOT_FDT_VIRT_START + BOOT_FDT_VIRT_SIZE);
 
     BUG_ON(rc);
+}
+
+static __used void noreturn init_done(void)
+{
+    ASSERT(system_state == SYS_STATE_active);
+
+    /* Must be done past setting system_state. */
+    unregister_init_virtual_region();
+
+    free_init_memory();
+
+    modify_after_init_mappings();
+
+    startup_cpu_idle_loop();
 }
 
 void __init noreturn start_xen(unsigned long bootcpu_id,
@@ -231,6 +247,8 @@ void __init noreturn start_xen(unsigned long bootcpu_id,
         domain_unpause_by_systemcontroller(d);
 
     printk("All set up\n");
+
+    switch_stack_and_jump(idle_vcpu[0]->arch.cpu_info, init_done);
 
     machine_halt();
 }

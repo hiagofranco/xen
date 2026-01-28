@@ -6,6 +6,7 @@
 #include <xen/domain_page.h>
 #include <xen/init.h>
 #include <xen/kernel.h>
+#include <xen/lib.h>
 #include <xen/libfdt/libfdt.h>
 #include <xen/macros.h>
 #include <xen/mm.h>
@@ -29,6 +30,8 @@ struct mmu_desc {
 };
 
 unsigned long __ro_after_init phys_offset; /* = load_start - XEN_VIRT_START */
+
+bool is_init_sect_freed;
 
 #define LOAD_TO_LINK(addr) ((unsigned long)(addr) - phys_offset)
 
@@ -583,6 +586,60 @@ void __init setup_mm(void)
 void *__init arch_vmap_virt_end(void)
 {
     return (void *)(VMAP_VIRT_START + VMAP_VIRT_SIZE);
+}
+
+/* Release all __init and __initdata ranges to be reused */
+void free_init_memory(void)
+{
+    paddr_t pa = virt_to_maddr(__init_begin);
+    unsigned long len = __init_end - __init_begin;
+    uint32_t insn = ILLEGAL_INSTR;
+    unsigned int i, nr = len / sizeof(insn);
+    uint32_t *p;
+    int rc;
+
+    rc = modify_xen_mappings((unsigned long)__init_begin,
+                             (unsigned long)__init_end, PAGE_HYPERVISOR_RW);
+    if ( rc )
+        panic("Unable to map RW the init section (rc = %d)\n", rc);
+
+    /*
+     * From now on, init will not be used for execution anymore,
+     * so nuke the instruction cache to remove entries related to init.
+     */
+    invalidate_icache();
+
+    p = (uint32_t *)__init_begin;
+    for ( i = 0; i < nr; i++ )
+        *(p + i) = insn;
+
+    rc = destroy_xen_mappings((unsigned long)__init_begin,
+                              (unsigned long)__init_end);
+    if ( rc )
+        panic("Unable to remove the init section (rc = %d)\n", rc);
+
+    is_init_sect_freed = true;
+
+    if ( !using_static_heap )
+    {
+        init_domheap_pages(pa, pa + len);
+        printk("Freed %lukB init memory.\n", len >> 10);
+    }
+}
+
+/*
+ * We have finished booting. Mark the section .data.ro_after_init
+ * read-only.
+ */
+void modify_after_init_mappings(void)
+{
+    int rc = modify_xen_mappings((unsigned long)&__ro_after_init_start,
+                                 (unsigned long)&__ro_after_init_end,
+                                 PAGE_HYPERVISOR_RO);
+
+    if ( rc )
+        panic("Unable to mark the .data.ro_after_init section read-only (rc = %d)\n",
+              rc);
 }
 
 static void __iomem *ioremap_attr(paddr_t pa, size_t len,
