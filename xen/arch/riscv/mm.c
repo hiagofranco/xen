@@ -30,6 +30,8 @@ struct mmu_desc {
 
 unsigned long __ro_after_init phys_offset; /* = load_start - XEN_VIRT_START */
 
+bool is_init_sect_freed;
+
 #define LOAD_TO_LINK(addr) ((unsigned long)(addr) - phys_offset)
 
 /*

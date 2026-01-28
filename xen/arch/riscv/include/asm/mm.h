@@ -57,6 +57,8 @@ static inline void *maddr_to_virt(paddr_t ma)
     maddr_to_mfn(pte_to_paddr(__entry));            \
 })
 
+extern bool is_init_sect_freed;
+
 /*
  * virt_to_maddr() is expected to work with virtual addresses from either
  * the directmap region or Xen's linkage (XEN_VIRT_START) region.
@@ -79,7 +81,7 @@ static inline unsigned long virt_to_maddr(unsigned long va)
     * The .init* sections will be freed when Xen completes booting,
     * so the [__init_begin, __init_end) range must be excluded.
     */
-    ASSERT((system_state < SYS_STATE_active) || !is_init_section(va));
+    ASSERT(!is_init_sect_freed || !is_init_section(va));
 
     /* phys_offset = load_start - XEN_VIRT_START */
     return phys_offset + va;

@@ -19,6 +19,7 @@
 #include <xen/static-evtchn.h>
 #include <xen/tasklet.h>
 #include <xen/timer.h>
+#include <xen/virtual_region.h>
 #include <xen/vmap.h>
 #include <xen/xvmalloc.h>
 
@@ -29,6 +30,7 @@
 #include <asm/early_printk.h>
 #include <asm/fixmap.h>
 #include <asm/intc.h>
+#include <asm/page.h>
 #include <asm/p2m.h>
 #include <asm/sbi.h>
 #include <asm/setup.h>
@@ -118,6 +120,70 @@ void __init discard_initial_modules(void)
 
  out:
     remove_early_mappings();
+}
+
+/* Release all __init and __initdata ranges to be reused */
+static void free_init_memory(void)
+{
+    paddr_t pa = virt_to_maddr(__init_begin);
+    unsigned long len = __init_end - __init_begin;
+    uint32_t insn = ILLEGAL_INSTR;
+    unsigned int i, nr = len / sizeof(insn);
+    uint32_t *p;
+    int rc;
+
+    rc = modify_xen_mappings((unsigned long)__init_begin,
+                             (unsigned long)__init_end, PAGE_HYPERVISOR_RW);
+    if ( rc )
+        panic("Unable to map RW the init section (rc = %d)\n", rc);
+
+    /*
+     * From now on, init will not be used for execution anymore,
+     * so nuke the instruction cache to remove entries related to init.
+     */
+    invalidate_icache();
+
+    p = (uint32_t *)__init_begin;
+    for ( i = 0; i < nr; i++ )
+        *(p + i) = insn;
+
+    rc = destroy_xen_mappings((unsigned long)__init_begin,
+                              (unsigned long)__init_end);
+    if ( rc )
+        panic("Unable to remove the init section (rc = %d)\n", rc);
+
+    is_init_sect_freed = true;
+
+    if ( !using_static_heap )
+    {
+        init_domheap_pages(pa, pa + len);
+        printk("Freed %lukB init memory.\n", len >> 10);
+    }
+}
+
+static __used void init_done(void)
+{
+    int rc;
+
+    ASSERT(system_state == SYS_STATE_active);
+
+    /* Must be done past setting system_state. */
+    unregister_init_virtual_region();
+
+    free_init_memory();
+
+    /*
+     * We have finished booting. Mark the section .data.ro_after_init
+     * read-only.
+     */
+    rc = modify_xen_mappings((unsigned long)&__ro_after_init_start,
+                             (unsigned long)&__ro_after_init_end,
+                             PAGE_HYPERVISOR_RO);
+    if ( rc )
+        panic("Unable to mark the .data.ro_after_init section read-only (rc = %d)\n",
+              rc);
+
+    startup_cpu_idle_loop();
 }
 
 void __init noreturn start_xen(unsigned long bootcpu_id,
@@ -256,6 +322,8 @@ void __init noreturn start_xen(unsigned long bootcpu_id,
         domain_unpause_by_systemcontroller(d);
 
     printk("All set up\n");
+
+    switch_stack_and_jump(idle_vcpu[0]->arch.cpu_info, init_done);
 
     machine_halt();
 }
