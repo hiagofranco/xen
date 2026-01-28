@@ -16,6 +16,12 @@ register struct pcpu_info *tp asm ( "tp" );
 struct pcpu_info {
     unsigned int processor_id; /* Xen CPU id */
     unsigned long hart_id; /* physical CPU id */
+
+    /*
+     * cpu_info lives at the top of the stack, so guest_cpu_info points
+     * to the top of the stack.
+     */
+    struct cpu_info *guest_cpu_info;
 } __cacheline_aligned;
 
 /* tp points to one of these */

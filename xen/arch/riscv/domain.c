@@ -11,9 +11,11 @@
 #include <asm/bitops.h>
 #include <asm/cpufeature.h>
 #include <asm/csr.h>
+#include <asm/current.h>
 #include <asm/intc.h>
 #include <asm/mmio.h>
 #include <asm/riscv_encoding.h>
+#include <asm/vmid.h>
 #include <asm/vtimer.h>
 
 struct csr_masks {
@@ -153,6 +155,8 @@ int arch_vcpu_create(struct vcpu *v)
     /* Idle VCPUs don't need the rest of this setup */
     if ( is_idle_vcpu(v) )
         return 0;
+
+    v->arch.last_pcpu = NR_CPUS;
 
     vcpu_csr_init(v);
 
@@ -322,6 +326,166 @@ int arch_domain_create(struct domain *d,
  fail:
     arch_domain_destroy(d);
     return rc;
+}
+
+static void save_csr_regs(struct vcpu *vcpu)
+{
+    /* vcpu->arch.hstatus = csr_read(CSR_HSTATUS); */
+    vcpu->arch.hedeleg = csr_read(CSR_HEDELEG);
+    vcpu->arch.hideleg = csr_read(CSR_HIDELEG);
+    vcpu->arch.hvip = csr_read(CSR_HVIP);
+    vcpu->arch.hie = csr_read(CSR_HIE);
+    vcpu->arch.henvcfg = csr_read(CSR_HENVCFG);
+    vcpu->arch.hcounteren = csr_read(CSR_HCOUNTEREN);
+    vcpu->arch.htimedelta = csr_read(CSR_HTIMEDELTA);
+    vcpu->arch.htval = csr_read(CSR_HTVAL);
+    vcpu->arch.htinst = csr_read(CSR_HTINST);
+    vcpu->arch.hstateen0 = csr_read(CSR_HSTATEEN0);
+#ifdef CONFIG_RISCV_32
+    vcpu->arch.henvcfgh = csr_read(CSR_HENVCFGH);
+    vcpu->arch.htimedeltah = csr_read(CSR_HTIMEDELTAH);
+#endif
+
+    vcpu->arch.vsstatus = csr_read(CSR_VSSTATUS);
+    vcpu->arch.vsie = csr_read(CSR_VSIE);
+    vcpu->arch.vstvec = csr_read(CSR_VSTVEC);
+    vcpu->arch.vsscratch = csr_read(CSR_VSSCRATCH);
+    vcpu->arch.vscause = csr_read(CSR_VSCAUSE);
+    vcpu->arch.vstval = csr_read(CSR_VSTVAL);
+    vcpu->arch.vsepc =  csr_read(CSR_VSEPC);
+}
+
+static void restore_csr_regs(struct vcpu *vcpu)
+{
+    csr_write(CSR_HEDELEG, vcpu->arch.hedeleg);
+    csr_write(CSR_HIDELEG, vcpu->arch.hideleg);
+    csr_write(CSR_HVIP, vcpu->arch.hvip);
+    csr_write(CSR_HIE, vcpu->arch.hie);
+    csr_write(CSR_HENVCFG, vcpu->arch.henvcfg);
+    csr_write(CSR_HCOUNTEREN, vcpu->arch.hcounteren);
+    csr_write(CSR_HTIMEDELTA, vcpu->arch.htimedelta);
+    csr_write(CSR_HTVAL, vcpu->arch.htval);
+    csr_write(CSR_HTINST, vcpu->arch.htinst);
+    csr_write(CSR_HSTATEEN0, vcpu->arch.hstateen0);
+
+#ifdef CONFIG_RISCV_32
+    csr_write(CSR_HENVCFGH, vcpu->arch.henvcfgh);
+    csr_write(CSR_HTIMEDELTAH, vcpu->arch.htimedeltah);
+#endif
+
+    csr_write(CSR_VSSTATUS, vcpu->arch.vsstatus);
+    csr_write(CSR_VSIE, vcpu->arch.vsie);
+    csr_write(CSR_VSTVEC, vcpu->arch.vstvec);
+    csr_write(CSR_VSSCRATCH, vcpu->arch.vsscratch);
+    csr_write(CSR_VSCAUSE, vcpu->arch.vscause);
+    csr_write(CSR_VSTVAL, vcpu->arch.vstval);
+    csr_write(CSR_VSEPC, vcpu->arch.vsepc);
+}
+
+static void ctxt_switch_from(struct vcpu *p)
+{
+    /*
+     * When the idle VCPU is running, Xen will always stay in hypervisor
+     * mode.
+     * Therefore we don't need to save the context of an idle VCPU.
+     */
+    if ( is_idle_vcpu(p) )
+    {
+        printk("%s: is_idle_vcpu\n", __func__);
+        return;
+    }
+
+    p2m_ctxt_switch_from(p);
+
+    vtimer_ctxt_switch_from(p);
+
+    save_csr_regs(p);
+
+    vintc_state_save(p);
+}
+
+static void ctxt_switch_to(struct vcpu *n)
+{
+    /*
+     * When the idle VCPU is running, Xen will always stay in hypervisor
+     * mode.
+     * Therefore we don't need to restore the context of an idle VCPU.
+     */
+    if ( is_idle_vcpu(n) )
+    {
+        printk("%s: is_idle_vcpu\n", __func__);
+
+        return;
+    }
+
+    /*
+     * If this vCPU last ran on a different pCPU, invalidate its VMID so
+     * vmid_handle_vmenter() assigns a fresh one from the current pCPU's pool.
+     * Without this, two pCPUs could independently assign the same
+     * (generation, vmid) pair, generation counters start at the same value
+     * on all pCPUs and increment independently, causing TLB contamination.
+     */
+    if ( n->arch.last_pcpu != smp_processor_id() )
+        vmid_flush_vcpu(n);
+
+    vtimer_ctxt_switch_to(n);
+
+    restore_csr_regs(n);
+
+    vintc_state_restore(n);
+
+    p2m_ctxt_switch_to(n);
+}
+
+static void schedule_tail(struct vcpu *prev)
+{
+    unsigned int cpu = smp_processor_id();
+
+    ASSERT(prev != current);
+
+    ctxt_switch_from(prev);
+
+    /*
+     * Mark this CPU in next domain's dirty cpumasks before calling
+     * ctxt_switch_to(). This avoids a race on things like p2m flushing,
+     * which is synchronised on that function.
+     */
+    if ( prev->domain != current->domain )
+        cpumask_set_cpu(cpu, current->domain->dirty_cpumask);
+    write_atomic(&current->dirty_cpu, cpu);
+
+    ctxt_switch_to(current);
+
+    tp->guest_cpu_info = current->arch.cpu_info;
+
+    if ( prev->domain != current->domain )
+        cpumask_clear_cpu(cpu, prev->domain->dirty_cpumask);
+    write_atomic(&prev->dirty_cpu, VCPU_CPU_CLEAN);
+
+    current->arch.last_pcpu = smp_processor_id();
+
+    /*
+     * sched_context_switched() internally uses a spinlock,
+     * which requires interrupts to be enabled.
+     */
+    local_irq_enable();
+
+    sched_context_switched(prev, current);
+}
+
+void context_switch(struct vcpu *prev, struct vcpu *next)
+{
+    ASSERT(local_irq_is_enabled());
+    ASSERT(prev != next);
+    ASSERT(!vcpu_cpu_dirty(next));
+
+    local_irq_disable();
+
+    set_current(next);
+
+    prev = __context_switch(prev, next);
+
+    schedule_tail(prev);
 }
 
 static void __init __maybe_unused build_assertions(void)

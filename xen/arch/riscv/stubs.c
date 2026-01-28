@@ -81,11 +81,6 @@ void smp_send_state_dump(unsigned int cpu)
 
 DEFINE_PER_CPU(struct vcpu *, curr_vcpu);
 
-void context_switch(struct vcpu *prev, struct vcpu *next)
-{
-    BUG_ON("unimplemented");
-}
-
 void continue_running(struct vcpu *same)
 {
     BUG_ON("unimplemented");

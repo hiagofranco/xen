@@ -31,6 +31,12 @@ struct arch_vcpu {
     struct vcpu_vmid vmid;
 
     /*
+     * The last physical CPU this vCPU ran on. Initialised to NR_CPUS
+     * (never ran).
+     */
+    unsigned int last_pcpu;
+
+    /*
      * Callee saved registers for Xen's state used to switch from
      * prev's stack to the next's stack during context switch.
      */
@@ -64,9 +70,19 @@ struct arch_vcpu {
     register_t henvcfg;
     register_t hie;
     register_t hstateen0;
+    register_t htinst;
+    register_t htimedelta;
+    register_t htval;
     register_t hvip;
 
     register_t vsatp;
+    register_t vscause;
+    register_t vsepc;
+    register_t vsie;
+    register_t vsscratch;
+    register_t vsstatus;
+    register_t vstval;
+    register_t vstvec;
 
     /*
      * VCPU interrupts
