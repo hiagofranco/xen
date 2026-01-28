@@ -106,4 +106,6 @@ unsigned int vcpu_guest_file_id(const struct vcpu *v);
 
 int vimsic_make_domu_dt_node(struct kernel_info *kinfo, unsigned int *phandle);
 
+int imsic_map_guest_file(struct vcpu *v, unsigned int vsfile_id);
+
 #endif /* ASM_RISCV_IMSIC_H */
