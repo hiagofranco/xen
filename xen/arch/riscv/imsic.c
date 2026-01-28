@@ -26,6 +26,7 @@
 #include <xen/xvmalloc.h>
 
 #include <asm/imsic.h>
+#include <asm/p2m.h>
 
 #define IMSIC_HART_SIZE(guest_bits) (BIT(guest_bits, U) * IMSIC_MMIO_PAGE_SZ)
 
@@ -340,6 +341,74 @@ static int __init imsic_parse_node(const struct dt_device_node *node,
     } while ( !dt_device_get_address(node, *nr_mmios, &base_addr, NULL) );
 
     return 0;
+}
+
+/*
+ * Map the physical IMSIC guest interrupt file (G-file) assigned to vCPU
+ * into the domain's stage-2 guest-physical address space.
+ *
+ * In the machine's physical address space (SPA), each hart's IMSIC
+ * supervisor-level file (S-file) is located at offset 0 of its address block,
+ * followed contiguously by GEILEN guest files at offsets of 1, 2, ..., N pages.
+ *
+ * Because a guest OS running in VS-mode expects its own supervisor-level
+ * interrupt file to be at offset 0 of its guest-physical IMSIC block, the
+ * hypervisor must use stage-2 address translation to map the vCPU's
+ * guest-physical "supervisor" page (GPA offset 0) to the specific
+ * physical guest file page (SPA offset guest_file_id) on the physical hart.
+ *
+ * A vCPU runs on the pCPU the scheduler picked for it (v->processor), and
+ * the guest file it is given (guest_file_id, from the vGEIN allocator)
+ * belongs to that very pCPU's IMSIC. A guest_file_id of 0 indicates that no
+ * hardware guest file is selected (matching the architectural behavior where
+ * vGEIN = 0 in the hstatus CSR selects no guest external interrupt source),
+ * requiring the VS-file to be emulated in software.
+ *
+ * Consequently the mapping installed here is only valid as long as the vCPU
+ * stays on that pCPU. When it migrates, a VS-file is acquired on the new
+ * pCPU and mapped at the very same GFN, so the stale mapping needs no
+ * explicit tear-down: it is simply replaced.
+ *
+ * The base guest-physical address advertised to the guest in the device
+ * tree matches offset 0 of the vCPU's virtual IMSIC block. Stage-2
+ * translation ensures that guest supervisor accesses to this page are
+ * transparently routed to the real hardware VS-file granted to it on
+ * the pCPU it currently runs on.
+ */
+int imsic_map_guest_file(struct vcpu *v, unsigned int vsfile_id)
+{
+    struct domain *d = v->domain;
+    unsigned int cpu = v->processor;
+    paddr_t gaddr = GUEST_IMSIC_S_BASE + (IMSIC_MMIO_PAGE_SZ * v->vcpu_id);
+    paddr_t paddr, guest_offset;
+    int res;
+
+    /* Nothing to map in the case of sw interrupt file. */
+    if ( !vsfile_id )
+        return 0;
+
+    guest_offset = vsfile_id * IMSIC_MMIO_PAGE_SZ;
+
+    paddr = imsic_cfg.msi[cpu].base_addr + imsic_cfg.msi[cpu].offset +
+            guest_offset;
+
+#ifdef IMSIC_DEBUG
+    dprintk(XENLOG_DEBUG,
+            "%s: %pv: ga(%#"PRIpaddr") -> pa(%#"PRIpaddr"), cpu(%u), "
+            "guest_file_id(%u) base_addr(%#"PRIpaddr") offset(%#lx)\n",
+            __func__, v, gaddr, paddr, cpu, vsfile_id,
+            imsic_cfg.msi[cpu].base_addr, imsic_cfg.msi[cpu].offset);
+#endif
+
+    res = map_regions_p2mt(d, gaddr_to_gfn(gaddr),
+                           PFN_DOWN(IMSIC_MMIO_PAGE_SZ), maddr_to_mfn(paddr),
+                           arch_dt_passthrough_p2m_type());
+    if ( res )
+        dprintk(XENLOG_ERR,
+                "%s: Failed to map %#"PRIpaddr" to the guest at %#"PRIpaddr"\n",
+                __func__, paddr, gaddr);
+
+    return res;
 }
 
 int cf_check vcpu_imsic_init(struct vcpu *v)
