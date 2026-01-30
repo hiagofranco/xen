@@ -523,6 +523,14 @@ int map_pages_to_xen(unsigned long virt,
     return pt_update(virt, mfn, nr_mfns, flags);
 }
 
+int modify_xen_mappings(unsigned long s, unsigned long e, pte_attr_t nf)
+{
+    ASSERT(IS_ALIGNED(s, PAGE_SIZE));
+    ASSERT(IS_ALIGNED(e, PAGE_SIZE));
+
+    return s < e ? pt_update(s, INVALID_MFN, PFN_DOWN(e - s), nf) : -EINVAL;
+}
+
 int destroy_xen_mappings(unsigned long s, unsigned long e)
 {
     ASSERT(IS_ALIGNED(s, PAGE_SIZE));
