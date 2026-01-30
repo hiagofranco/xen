@@ -149,4 +149,6 @@ struct aplic_regs {
 uint32_t aplic_hw_read_reg(unsigned int offset, uint32_t mask);
 void aplic_hw_write_reg(unsigned int offset, uint32_t value);
 
+bool has_msi_support(void);
+
 #endif /* ASM_RISCV_APLIC_H */
