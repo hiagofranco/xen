@@ -43,6 +43,8 @@ struct dt_device_node;
 int dt_processor_hartid(const struct dt_device_node *node,
                         unsigned long *hartid);
 
+void smp_init_cpus(void);
+
 #endif
 
 /*

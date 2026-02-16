@@ -3,6 +3,7 @@
 #include <xen/device_tree.h>
 #include <xen/errno.h>
 #include <xen/init.h>
+#include <xen/param.h>
 #include <xen/sections.h>
 #include <xen/types.h>
 
@@ -10,6 +11,10 @@
 
 cpumask_t __read_mostly cpu_online_map;
 cpumask_t __ro_after_init cpu_possible_map;
+
+/* maxcpus: maximum number of CPUs to activate. */
+static unsigned int __initdata max_cpus;
+integer_param("maxcpus", max_cpus);
 
 void __init smp_prepare_boot_cpu(void)
 {
@@ -91,4 +96,65 @@ int dt_processor_hartid(const struct dt_device_node *node,
     }
 
     return 0;
+}
+
+void __init smp_init_cpus(void)
+{
+    struct dt_device_node *cpus = dt_find_node_by_path("/cpus");
+    struct dt_device_node *cpu;
+    unsigned long hart;
+    bool found_boot_cpu = false;
+    int cpuid = 1;
+    int rc;
+
+    dt_for_each_child_node( cpus, cpu )
+    {
+        if ( !dt_device_type_is_equal(cpu, "cpu") )
+            continue;
+
+        rc = dt_processor_hartid(cpu, &hart);
+        if ( rc < 0 )
+            continue;
+
+        if ( hart == cpuid_to_hartid(0) )
+        {
+            BUG_ON(found_boot_cpu);
+
+            found_boot_cpu = 1;
+
+            continue;
+        }
+
+        if ( cpuid >= NR_CPUS )
+        {
+            printk("Invalid cpuid [%d] for hartid [%lu]\n", cpuid, hart);
+
+            continue;
+        }
+
+        cpumask_set_cpu(cpuid, &cpu_possible_map);
+
+        set_cpuid_to_hartid(cpuid, hart);
+
+        cpuid++;
+    }
+
+    BUG_ON(!found_boot_cpu);
+
+    if ( cpuid > NR_CPUS )
+        printk("Total number of cpus [%d] is greater than nr_cpus option value [%d]\n",
+               cpuid, NR_CPUS);
+
+    if ( ( !max_cpus ) || ( max_cpus > nr_cpu_ids ) )
+        max_cpus = nr_cpu_ids;
+
+    cpuid = 0;
+
+    for ( unsigned int i = 0; i < max_cpus; i++ )
+        if ( cpu_possible(i) )
+            cpuid++;
+
+    nr_cpu_ids = cpuid;
+
+    printk(XENLOG_INFO "SMP: Allowing %u CPUs\n", nr_cpu_ids);
 }
