@@ -190,6 +190,14 @@ void __init noreturn start_xen(unsigned long bootcpu_id,
 
     console_init_preirq();
 
+    /*
+     * Must be called before intc_init() to ensure that CPU ID <-> hart ID
+     * conversions are properly initialized. This conversion may be needed
+     * during interrupt controller setup; for example, imsic_init() uses it
+     * to configure MSI addresses for each CPU.
+     */
+    smp_init_cpus();
+
     intc_init();
 
     timer_init();
