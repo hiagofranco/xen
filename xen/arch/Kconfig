@@ -9,7 +9,7 @@ config NR_CPUS
 	range 1 1 if ARM && MPU
 	range 1 16383
 	default "256" if X86
-	default "1" if !ARM || MPU
+	default "1" if (!ARM && !RISCV) || MPU
 	default "8" if RCAR3
 	default "4" if QEMU
 	default "4" if MPSOC
