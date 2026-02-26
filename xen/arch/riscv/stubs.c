@@ -230,11 +230,6 @@ static inline unsigned long raw_clear_guest(void *to, unsigned int len)
 
 /* smpboot.c */
 
-int __cpu_up(unsigned int cpu)
-{
-    BUG_ON("unimplemented");
-}
-
 void __cpu_disable(void)
 {
     BUG_ON("unimplemented");
