@@ -5,6 +5,7 @@
 #include <xen/bootinfo.h>
 #include <xen/compile.h>
 #include <xen/console.h>
+#include <xen/cpu.h>
 #include <xen/device_tree.h>
 #include <xen/domain.h>
 #include <xen/dom0less-build.h>
@@ -110,14 +111,15 @@ void __init noreturn start_xen(unsigned long bootcpu_id,
     size_t fdt_size;
     int rc;
     struct domain *d;
-
-    remove_identity_mapping();
+    unsigned int i;
 
     smp_prepare_boot_cpu();
 
     sort_exception_tables();
 
     set_cpuid_to_hartid(0, bootcpu_id);
+
+    percpu_init_areas();
 
     trap_init();
 
@@ -212,10 +214,31 @@ void __init noreturn start_xen(unsigned long bootcpu_id,
 
     guest_mm_init();
 
+    do_presmp_initcalls();
+
     scheduler_init();
     set_current(idle_vcpu[0]);
 
     smp_prepare_cpus();
+
+    for_each_present_cpu ( i )
+    {
+        if ( (num_online_cpus() < nr_cpu_ids) && !cpu_online(i) )
+        {
+            int ret = cpu_up(i);
+            if ( ret != 0 )
+                printk("Failed to bring up CPU %u (error %d)\n", i, ret);
+        }
+    }
+
+    printk("Brought up %d CPUs\n", num_online_cpus());
+
+    /*
+     * Some code executed during secondary CPU bring-up requires 1:1 mappings.
+     * Call remove_identity_mapping() only after all secondary CPUs have been
+     * brought up.
+     */
+    remove_identity_mapping();
 
     do_initcalls();
 
