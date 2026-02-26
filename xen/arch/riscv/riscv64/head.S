@@ -86,6 +86,18 @@ FUNC(setup_tp)
         ret
 END(setup_tp)
 
+        /*
+         * secondary_start_sbi() is entered after __cpu_up() calls
+         * sbi_hsm_hart_start().
+         *
+         * a0 - hartid of the started hart
+         * a1 - private data passed by the boot CPU
+         */
+FUNC(secondary_start_sbi)
+.L_secondary_start_sbi:
+        j .L_secondary_start_sbi
+END(secondary_start_sbi)
+
         .section .text.ident, "ax", %progbits
 
 FUNC(turn_on_mmu)
