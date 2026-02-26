@@ -3,9 +3,12 @@
 #include <xen/device_tree.h>
 #include <xen/errno.h>
 #include <xen/init.h>
+#include <xen/lib.h>
+#include <xen/mm.h>
 #include <xen/param.h>
 #include <xen/percpu.h>
 #include <xen/sections.h>
+#include <xen/softirq.h>
 #include <xen/types.h>
 
 #include <asm/current.h>
@@ -21,6 +24,51 @@ integer_param("maxcpus", max_cpus);
 DEFINE_PER_CPU_READ_MOSTLY(cpumask_var_t, cpu_sibling_mask);
 /* Representing all harts sharing the same physical core */
 DEFINE_PER_CPU_READ_MOSTLY(cpumask_var_t, cpu_core_mask);
+
+static unsigned char __initdata cpu_stack[STACK_SIZE * NR_CPUS]
+    __aligned(STACK_SIZE);
+
+extern char secondary_start_sbi[];
+
+int __cpu_up(unsigned int cpu)
+{
+    unsigned long boot_addr = virt_to_maddr(secondary_start_sbi);
+    unsigned long hartid = cpuid_to_hartid(cpu);
+    unsigned long hsm_data = (unsigned long)&cpu_stack[STACK_SIZE * cpu];
+    int ret;
+    s_time_t deadline;
+
+    dprintk(XENLOG_INFO, "CPU%ld boot addr: %#lx, stack addr: %#lx\n",
+            hartid, boot_addr, hsm_data);
+
+    ret = sbi_hsm_hart_start(hartid, boot_addr, hsm_data);
+    if ( !ret )
+    {
+        deadline = NOW() + MILLISECS(1000);
+
+        while ( !cpu_online(cpu) && NOW() < deadline )
+        {
+            cpu_relax();
+            process_pending_softirqs();
+        }
+
+        /*
+          * Ensure that other cpus' initializations are visible before
+          * proceeding. Corresponds to smp_wmb() in start_secondary.
+          */
+        smp_rmb();
+
+        if ( !cpu_online(cpu) )
+        {
+            printk("CPU%d never came online\n", cpu);
+            return -EIO;
+        }
+    }
+    else
+        printk("CPU%d: failed to start\n", cpu);
+
+    return ret;
+}
 
 void __init smp_prepare_boot_cpu(void)
 {
