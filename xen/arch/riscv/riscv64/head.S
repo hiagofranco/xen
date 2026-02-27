@@ -49,6 +49,7 @@ FUNC(start)
         call    turn_on_mmu
 
 .L_primary_switched:
+        la      sp, cpu0_boot_stack
         /*
          * cpu0_boot_stack address is 1:1 mapping related so it should be
          * recalculated after jump from 1:1 mapping world as 1:1 mapping
@@ -70,7 +71,6 @@ END(start)
         .section .text, "ax", %progbits
 
 FUNC(reset_stack)
-        la      sp, cpu0_boot_stack
         li      t0, STACK_SIZE
         add     sp, sp, t0
 
@@ -94,8 +94,34 @@ END(setup_tp)
          * a1 - private data passed by the boot CPU
          */
 FUNC(secondary_start_sbi)
-.L_secondary_start_sbi:
-        j .L_secondary_start_sbi
+        /* Mask all interrupts */
+        csrw    CSR_SIE, zero
+
+        /*
+         * Disable FPU to detect illegal usage of floating point in hypervisor
+         * space.
+         */
+        li      t0, SSTATUS_FS
+        csrc    CSR_SSTATUS, t0
+
+        /* Save hartid as it should be passed to smp_callin() later */
+        mv      s0, a0
+
+        la      t1, phys_offset
+        REG_L   t1, (t1)
+
+        /* Calculate proper VA after jump from 1:1 mapping */
+        la      a0, .L_secondary_switched
+        sub     a0, a0, t1
+
+        call    turn_on_mmu
+
+.L_secondary_switched:
+        mv      sp, a1
+        jal     reset_stack
+
+        mv      a0, s0
+        tail    smp_callin
 END(secondary_start_sbi)
 
         .section .text.ident, "ax", %progbits

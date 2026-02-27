@@ -1,4 +1,5 @@
 #include <xen/bootfdt.h>
+#include <xen/cpu.h>
 #include <xen/cpumask.h>
 #include <xen/device_tree.h>
 #include <xen/errno.h>
@@ -7,11 +8,16 @@
 #include <xen/mm.h>
 #include <xen/param.h>
 #include <xen/percpu.h>
+#include <xen/sched.h>
 #include <xen/sections.h>
 #include <xen/softirq.h>
 #include <xen/types.h>
 
+#include <asm/aia.h>
+#include <asm/early_printk.h>
 #include <asm/current.h>
+#include <asm/traps.h>
+#include <asm/vmid.h>
 
 cpumask_t __read_mostly cpu_online_map;
 cpumask_t __ro_after_init cpu_possible_map;
@@ -68,6 +74,71 @@ int __cpu_up(unsigned int cpu)
         printk("CPU%d: failed to start\n", cpu);
 
     return ret;
+}
+
+/* C entry point for a secondary processor */
+void __init noreturn smp_callin(unsigned int hartid)
+{
+    unsigned int xen_cpuid = hartid_to_cpuid(hartid);
+    unsigned long tmp = 0;
+
+    /*
+     * If Xen's CPU ID is incorrect, tp cannot be set up reliably.
+     * Without a valid tp, smp_processor_id() may return a wrong value,
+     * breaking printk(). Use early_printk() instead.
+     */
+    if ( xen_cpuid == NR_CPUS )
+    {
+        char msg[256];
+
+        snprintf(msg, sizeof(msg), "Got incorrect cpuid(%u) for hartid(%u)\n",
+                 xen_cpuid, hartid);
+
+        early_printk(msg);
+
+        while (1);
+    }
+
+    asm volatile ("mv tp, %0" :: "r"((unsigned long)&pcpu_info[xen_cpuid]));
+
+    set_processor_id(xen_cpuid);
+
+    trap_init();
+
+    vmid_init();
+
+    local_irq_enable();
+
+    set_current(idle_vcpu[xen_cpuid]);
+
+    if ( csr_read_safe(CSR_STIMECMP, &tmp) )
+    {
+        /*
+         * A VS-timer interrupt becomes pending whenever the value of
+         * (time + htimedelta) is greater than or equal to vstimecmp CSR.
+         * Thereby to avoid spurious VS-timer irqs set vstimecmp CSR to
+         * -1.
+         *
+         * It will be dropped when SSTC support for guest will be added.
+         */
+        csr_write64(CSR_VSTIMECMP, -1UL);
+    }
+
+    /* Run local notifiers */
+    notify_cpu_starting(xen_cpuid);
+
+    /*
+     * Ensure that previous writes are visible before marking the cpu as
+     * online.
+     */
+    smp_wmb();
+
+    /* Now report this CPU is up */
+    cpumask_set_cpu(xen_cpuid, &cpu_online_map);
+
+    printk(XENLOG_DEBUG "CPU %u booted.\n", smp_processor_id());
+
+    startup_cpu_idle_loop();
 }
 
 void __init smp_prepare_boot_cpu(void)
@@ -235,3 +306,43 @@ void __init smp_prepare_cpus(void)
     if ( rc )
         panic("Unable to allocate CPU sibling/core maps\n");
 }
+
+static int cf_check cpu_smpboot_callback(struct notifier_block *nfb,
+                                         unsigned long action,
+                                         void *hcpu)
+{
+    unsigned int cpu = (unsigned long)hcpu;
+    unsigned int rc = 0;
+
+    switch ( action )
+    {
+    case CPU_UP_PREPARE:
+        rc = setup_cpu_sibling_map(cpu);
+        if ( rc )
+            printk(XENLOG_ERR
+                   "Unable to allocate CPU sibling/core map  for CPU%u\n",
+                   cpu);
+        break;
+
+    case CPU_DEAD:
+        printk("%s: CPU_DEAD case is unimplemented\n", __func__);
+        break;
+
+    default:
+        break;
+    }
+
+    return notifier_from_errno(rc);
+}
+
+static struct notifier_block cpu_smpboot_nfb = {
+    .notifier_call = cpu_smpboot_callback,
+};
+
+static int __init cpu_smpboot_notifier_init(void)
+{
+    register_cpu_notifier(&cpu_smpboot_nfb);
+
+    return 0;
+}
+presmp_initcall(cpu_smpboot_notifier_init);
