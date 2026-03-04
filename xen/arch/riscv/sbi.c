@@ -170,7 +170,7 @@ static int sbi_rfence_v02_real(unsigned long fid,
 static int cf_check sbi_rfence_v02(unsigned long fid,
                                    const cpumask_t *cpu_mask,
                                    vaddr_t start, size_t size,
-                                   unsigned long arg4, unsigned long arg5)
+                                   unsigned long arg4)
 {
     unsigned long hartid, cpuid, hmask = 0, hbase = 0, htop = 0;
     int result = -EINVAL;
@@ -247,8 +247,7 @@ static int (* __ro_after_init sbi_rfence)(unsigned long fid,
                                           const cpumask_t *cpu_mask,
                                           vaddr_t start,
                                           size_t size,
-                                          unsigned long arg4,
-                                          unsigned long arg5);
+                                          unsigned long arg4);
 
 /*
  * Programs the clock for next event at (or after) stime_value. stime_value is
@@ -305,21 +304,21 @@ int sbi_remote_sfence_vma(const cpumask_t *cpu_mask, vaddr_t start,
     ASSERT(sbi_rfence);
 
     return sbi_rfence(SBI_EXT_RFENCE_REMOTE_SFENCE_VMA,
-                      cpu_mask, start, size, 0, 0);
+                      cpu_mask, start, size, 0);
 }
 
 int sbi_remote_hfence_gvma(const cpumask_t *cpu_mask, vaddr_t start,
                            size_t size)
 {
     return sbi_rfence(SBI_EXT_RFENCE_REMOTE_HFENCE_GVMA,
-                      cpu_mask, start, size, 0, 0);
+                      cpu_mask, start, size, 0);
 }
 
 int sbi_remote_hfence_gvma_vmid(const cpumask_t *cpu_mask, vaddr_t start,
                                 size_t size, unsigned long vmid)
 {
     return sbi_rfence(SBI_EXT_RFENCE_REMOTE_HFENCE_GVMA_VMID,
-                      cpu_mask, start, size, vmid, 0);
+                      cpu_mask, start, size, vmid);
 }
 
 int sbi_hsm_hart_start(unsigned long hartid, unsigned long saddr,
