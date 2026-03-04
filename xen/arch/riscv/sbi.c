@@ -24,7 +24,84 @@
 #include <asm/sbi.h>
 #include <asm/time.h>
 
+typedef int (*sbi_batch_fn_t)(unsigned long fid, unsigned long hmask,
+                              unsigned long hbase, unsigned long arg2,
+                              unsigned long arg3, unsigned long arg4);
+
 static unsigned long __ro_after_init sbi_spec_version = SBI_SPEC_VERSION_DEFAULT;
+
+static int sbi_batch_harts(unsigned long fid, const cpumask_t *mask,
+                           sbi_batch_fn_t fn, unsigned long arg2,
+                           unsigned long arg3, unsigned long arg4)
+{
+    unsigned long hartid, cpuid, hmask = 0, hbase = 0, htop = 0;
+    int result = -EINVAL;
+
+    /*
+     * hart_mask_base can be set to -1 to indicate that hart_mask can be
+     * ignored and all available harts must be considered.
+     */
+    if ( !mask )
+        return fn(fid, 0UL, -1UL, arg2, arg3, arg4);
+
+    for_each_cpu ( cpuid, mask )
+    {
+        /*
+         * Hart IDs might not necessarily be numbered contiguously in
+         * a multiprocessor system.
+         *
+         * This means that it is possible for the hart ID mapping to look like:
+         *  0, 1, 3, 65, 66, 69
+         * In such cases, more than one call to fn(hmask, hbase, ...) will be
+         * needed, as a single hmask can only cover sizeof(unsigned long) CPUs:
+         *  1. fn(hmask=0b1011, hbase=0)
+         *  2. fn(hmask=0b1011, hbase=65)
+         *
+         * The algorithm below tries to batch as many harts as possible before
+         * making an SBI call. However, batching may not always be possible.
+         * For example, consider the hart ID mapping:
+         *   0, 64, 1, 65, 2, 66 (1)
+         *
+         * Generally, batching is also possible for (1):
+         *    First (0,1,2), then (64,65,66).
+         * It just requires a different approach and updates to the current
+         * algorithm.
+         */
+        hartid = cpuid_to_hartid(cpuid);
+        if ( hmask )
+        {
+            if ( hartid + BITS_PER_LONG <= htop ||
+                 hbase + BITS_PER_LONG <= hartid )
+            {
+                result = fn(fid, hmask, hbase, arg2, arg3, arg4);
+                hmask = 0;
+                if ( result )
+                    break;
+            }
+            else if ( hartid < hbase )
+            {
+                /* shift the mask to fit lower hartid */
+                hmask <<= hbase - hartid;
+                hbase = hartid;
+            }
+        }
+
+        if ( !hmask )
+        {
+            hbase = hartid;
+            htop = hartid;
+        }
+        else if ( hartid > htop )
+            htop = hartid;
+
+        hmask |= BIT(hartid - hbase, UL);
+    }
+
+    if ( hmask )
+        result = fn(fid, hmask, hbase, arg2, arg3, arg4);
+
+    return result;
+}
 
 struct sbiret sbi_ecall(unsigned long ext, unsigned long fid,
                         unsigned long arg0, unsigned long arg1,
@@ -167,80 +244,21 @@ static int sbi_rfence_v02_real(unsigned long fid,
     return result;
 }
 
+static int sbi_rfence_v02_batch_fn(unsigned long fid, unsigned long hmask,
+                                   unsigned long hbase, unsigned long start,
+                                   unsigned long size, unsigned long arg4)
+{
+    return sbi_rfence_v02_real(fid, hmask, hbase, start, size, arg4);
+}
+
 static int cf_check sbi_rfence_v02(unsigned long fid,
                                    const cpumask_t *cpu_mask,
                                    vaddr_t start, size_t size,
                                    unsigned long arg4)
 {
-    unsigned long hartid, cpuid, hmask = 0, hbase = 0, htop = 0;
-    int result = -EINVAL;
-
-    /*
-     * hart_mask_base can be set to -1 to indicate that hart_mask can be
-     * ignored and all available harts must be considered.
-     */
-    if ( !cpu_mask )
-        return sbi_rfence_v02_real(fid, 0UL, -1UL, start, size, arg4);
-
-    for_each_cpu ( cpuid, cpu_mask )
-    {
-        /*
-         * Hart IDs might not necessarily be numbered contiguously in
-         * a multiprocessor system.
-         *
-         * This means that it is possible for the hart ID mapping to look like:
-         *  0, 1, 3, 65, 66, 69
-         * In such cases, more than one call to sbi_rfence_v02_real() will be
-         * needed, as a single hmask can only cover sizeof(unsigned long) CPUs:
-         *  1. sbi_rfence_v02_real(hmask=0b1011, hbase=0)
-         *  2. sbi_rfence_v02_real(hmask=0b1011, hbase=65)
-         *
-         * The algorithm below tries to batch as many harts as possible before
-         * making an SBI call. However, batching may not always be possible.
-         * For example, consider the hart ID mapping:
-         *   0, 64, 1, 65, 2, 66 (1)
-         *
-         * Generally, batching is also possible for (1):
-         *    First (0,1,2), then (64,65,66).
-         * It just requires a different approach and updates to the current
-         * algorithm.
-         */
-        hartid = cpuid_to_hartid(cpuid);
-        if ( hmask )
-        {
-            if ( hartid + BITS_PER_LONG <= htop ||
-                 hbase + BITS_PER_LONG <= hartid )
-            {
-                result = sbi_rfence_v02_real(fid, hmask, hbase,
-                                             start, size, arg4);
-                hmask = 0;
-                if ( result )
-                    break;
-            }
-            else if ( hartid < hbase )
-            {
-                /* shift the mask to fit lower hartid */
-                hmask <<= hbase - hartid;
-                hbase = hartid;
-            }
-        }
-
-        if ( !hmask )
-        {
-            hbase = hartid;
-            htop = hartid;
-        }
-        else if ( hartid > htop )
-            htop = hartid;
-
-        hmask |= BIT(hartid - hbase, UL);
-    }
-
-    if ( hmask )
-        result = sbi_rfence_v02_real(fid, hmask, hbase,
-                                     start, size, arg4);
-
-    return result;
+    return sbi_batch_harts(fid, cpu_mask,
+                           sbi_rfence_v02_batch_fn,
+                           start, size, arg4);
 }
 
 static int (* __ro_after_init sbi_rfence)(unsigned long fid,
