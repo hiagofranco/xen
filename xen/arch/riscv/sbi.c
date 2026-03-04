@@ -103,6 +103,28 @@ static int sbi_batch_harts(unsigned long fid, const cpumask_t *mask,
     return result;
 }
 
+static void sbi_cpumask_to_hartmask(const cpumask_t *cmask, cpumask_t *hmask)
+{
+    unsigned int cpu;
+
+    BUG_ON(!cmask || !hmask);
+
+    cpumask_clear(hmask);
+
+    for_each_cpu(cpu, cmask)
+    {
+        unsigned long hart = cpuid_to_hartid(pcpu_info[cpu].processor_id);
+
+        if ( nr_cpu_ids <= hart )
+        {
+            dprintk(XENLOG_ERR, "Invalid hart=%lu for cpu=%d\n", hart, cpu);
+            continue;
+        }
+
+        cpumask_set_cpu(hart, hmask);
+    }
+}
+
 struct sbiret sbi_ecall(unsigned long ext, unsigned long fid,
                         unsigned long arg0, unsigned long arg1,
                         unsigned long arg2, unsigned long arg3,
@@ -364,6 +386,56 @@ int sbi_hsm_hart_stop(void)
         return 0;
 }
 
+static int sbi_send_ipi_v02_real(unsigned long hmask, unsigned long hbase)
+{
+    struct sbiret ret;
+    int result;
+
+    ret = sbi_ecall(SBI_EXT_IPI, SBI_EXT_IPI_SEND_IPI, hmask, hbase, 0, 0, 0,
+                    0);
+
+    result = sbi_err_map_xen_errno(ret.error);
+
+    if ( result )
+    {
+        dprintk(XENLOG_ERR, "hmask=%#lx hbase=%lu failed: err(%d)\n", hmask,
+                hbase, result);
+    }
+
+    return result;
+}
+
+int sbi_send_ipi_v02_batch_fn(unsigned long fid, unsigned long hmask,
+                              unsigned long hbase, unsigned long arg0,
+                              unsigned long arg1, unsigned long arg2)
+{
+    return sbi_send_ipi_v02_real(hmask, hbase);
+}
+
+static int cf_check sbi_send_ipi_v02(const cpumask_t *mask)
+{
+    /*
+     * The FID argument may be any value, as it is ignored for the IPI
+     * SBI call. sbi_send_ipi_v02_real() does not use the FID parameter.
+     */
+    return sbi_batch_harts(0, mask, sbi_send_ipi_v02_batch_fn, 0, 0, 0);
+}
+
+static int cf_check sbi_send_ipi_v01(const cpumask_t *mask)
+{
+    cpumask_t tmask;
+    struct sbiret ret;
+
+    sbi_cpumask_to_hartmask(mask, &tmask);
+
+    ret = sbi_ecall(SBI_EXT_0_1_SEND_IPI, 0,
+                    (unsigned long)cpumask_bits(&tmask), 0, 0, 0, 0, 0);
+
+    return sbi_err_map_xen_errno(ret.error);
+}
+
+int (* __ro_after_init sbi_send_ipi)(const cpumask_t *mask) = sbi_send_ipi_v01;
+
 /* This function must always succeed. */
 #define sbi_get_spec_version()  \
     sbi_ext_base_func(SBI_EXT_BASE_GET_SPEC_VERSION)
@@ -426,6 +498,12 @@ int __init sbi_init(void)
 
         if ( sbi_probe_extension(SBI_EXT_HSM) > 0 )
             dprintk(XENLOG_INFO, "SBI v0.2 HSM extenstion detected\n");
+
+        if (sbi_probe_extension(SBI_EXT_IPI) > 0)
+        {
+            sbi_send_ipi = sbi_send_ipi_v02;
+            dprintk(XENLOG_INFO, "SBI IPI extension detected\n");
+        }
     }
     else
         panic("Ooops. SBI spec version 0.1 detected. Need to add support");

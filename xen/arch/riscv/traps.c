@@ -33,6 +33,8 @@ void trap_init(void)
 
     csr_write(CSR_SSCRATCH, 0);
     csr_write(CSR_STVEC, addr);
+
+    csr_set(CSR_SIE, SIP_SSIP);
 }
 
 static const char *decode_trap_cause(unsigned long cause)
@@ -299,6 +301,11 @@ void do_trap(struct cpu_user_regs *cpu_regs)
 
             switch ( icause )
             {
+            case IRQ_S_SOFT:
+                csr_clear(CSR_SIP, SIP_SSIP);
+                /* Nothing to do, will check for events on return path */
+                break;
+
             case IRQ_S_EXT:
                 intc_handle_external_irqs(cpu_regs);
                 break;
