@@ -13,6 +13,7 @@
 #define ASM__RISCV__SBI_H
 
 #include <xen/cpumask.h>
+#include <xen/sections.h>
 
 /* SBI-defined implementation ID */
 #define SBI_XEN_IMPID 7
@@ -31,6 +32,7 @@
 #define SBI_EXT_RFENCE                  0x52464E43
 #define SBI_EXT_TIME                    0x54494D45
 #define SBI_EXT_HSM                     0x48534D
+#define SBI_EXT_IPI                     0x735049
 
 /* SBI function IDs for BASE extension */
 #define SBI_EXT_BASE_GET_SPEC_VERSION   0x0
@@ -52,6 +54,9 @@
 
 /* SBI function IDs for TIME extension */
 #define SBI_EXT_TIME_SET_TIMER          0x0
+
+/* SBI function IDs for IPI extension */
+#define SBI_EXT_IPI_SEND_IPI            0x0
 
 #define SBI_SPEC_VERSION_MAJOR_MASK     0x7f000000
 #define SBI_SPEC_VERSION_MINOR_MASK     0x00ffffff
@@ -187,6 +192,18 @@ int sbi_hsm_hart_stop(void);
  */
 int sbi_hsm_hart_start(unsigned long hartid, unsigned long saddr,
                        unsigned long opaque);
+
+/*
+ * Send an inter-processor interrupt to all the harts defined in hart mask.
+ * Interprocessor interrupts manifest at the receiving harts as Supervisor
+ * Software Interrupts.
+ *
+ * This SBI call returns 0 upon success or an implementation specific negative
+ * error code.
+ *
+ * @mask represents a set of Xen's CPU_IDs
+ */
+extern int (* __ro_after_init sbi_send_ipi)(const cpumask_t *mask);
 
 /*
  * Initialize SBI library

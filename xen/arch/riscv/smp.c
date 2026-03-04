@@ -1,6 +1,8 @@
 #include <xen/cpumask.h>
 #include <xen/smp.h>
 
+#include <asm/sbi.h>
+
 /*
  * FIXME: make pcpu_info[] dynamically allocated when necessary
  *        functionality will be ready
@@ -17,6 +19,5 @@ struct pcpu_info pcpu_info[NR_CPUS] = { [0 ... NR_CPUS - 1] = {
 
 void smp_send_event_check_mask(const cpumask_t *mask)
 {
-    /* Catch missing implementation once SMP support is introduced */
-    BUG_ON(!cpumask_subset(mask, cpumask_of(0)));
+    sbi_send_ipi(mask);
 }
