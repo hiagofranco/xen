@@ -54,6 +54,8 @@ struct cpu_user_regs
     unsigned long pregs;
 };
 
+#define MAX_REG_OFFSET offsetof(struct cpu_user_regs, t6)
+
 /* TODO: need to implement */
 #define cpu_to_core(cpu)   0
 #define cpu_to_socket(cpu) 0
