@@ -202,7 +202,8 @@ void do_trap(struct cpu_user_regs *cpu_regs)
      *
      * Traps taken from the guest must never be fixed up: sepc is then a guest
      * address, which the guest could point at an address listed in the
-     * exception table, making Xen act on an entry fully under guest control.
+     * exception table, making Xen act on an entry (and, for EX_TYPE_TRAP_INFO,
+     * write through a pointer) fully under guest control.
      *
      * Interrupts must be excluded too: one taken at an address which happens
      * to be listed in the exception table would otherwise be "fixed up" as if
@@ -212,7 +213,7 @@ void do_trap(struct cpu_user_regs *cpu_regs)
      * that only runs for traps taken from the guest.
      */
     if ( !from_guest && !(cause & CAUSE_IRQ_FLAG) &&
-         fixup_exception(cpu_regs) )
+         fixup_exception(cpu_regs, cause) )
         return;
 
     switch ( cause )

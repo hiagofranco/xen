@@ -12,6 +12,7 @@
 #include <asm/cpufeature.h>
 #include <asm/csr.h>
 #include <asm/current.h>
+#include <asm/gpr-num.h>
 #include <asm/intc.h>
 #include <asm/mmio.h>
 #include <asm/riscv_encoding.h>
@@ -478,9 +479,30 @@ void context_switch(struct vcpu *prev, struct vcpu *next)
 
 static void __init __maybe_unused build_assertions(void)
 {
+/*
+ * GPR_LIST() puts nothing between its entries, so the separator has to come
+ * from here. It is emitted ahead of each entry rather than after it, so that
+ * the expansion doesn't end with one and its use below can be terminated like
+ * an ordinary statement.
+ */
+#define CHECK_GPR_INDEX(num, name)                          \
+    ; BUILD_BUG_ON(offsetof(struct cpu_user_regs, name) !=  \
+                   offsetof(struct cpu_user_regs, zero) +   \
+                   (num) * sizeof(unsigned long))
+
     /*
      * Enforce the requirement documented in struct cpu_info that
      * guest_cpu_user_regs must be the first field.
      */
     BUILD_BUG_ON(offsetof(struct cpu_info, guest_cpu_user_regs));
+
+    /*
+     * Enforce the requirement documented in struct cpu_user_regs that the
+     * x0..x31 fields are contiguous and in architectural register-number
+     * order, which is what lets a register number be resolved to its saved
+     * value by indexing them as an array anchored at ->zero.
+     */
+    GPR_LIST(CHECK_GPR_INDEX);
+
+#undef CHECK_GPR_INDEX
 }

@@ -12,7 +12,19 @@
 
 #ifndef __ASSEMBLER__
 
-/* On stack VCPU state */
+/*
+ * On stack VCPU state.
+ *
+ * The x0..x31 fields must remain contiguous and in architectural
+ * register-number order: code which resolves a register number to its saved
+ * value indexes them as an array anchored at ->zero. Where that block sits
+ * within the structure is of no interest, but nothing may be inserted in
+ * between its fields. The layout is checked against GPR_LIST() at build
+ * time; see build_assertions() in domain.c.
+ *
+ * ->zero additionally has to always read as 0, since it supplies the value
+ * of x0 when x0 is used as a source operand.
+ */
 struct cpu_user_regs
 {
     unsigned long zero;

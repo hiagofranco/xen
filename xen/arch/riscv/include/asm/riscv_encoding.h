@@ -903,8 +903,13 @@
 #define REG_OFFSET(insn, pos)		\
 	(SHIFT_RIGHT((insn), (pos) - LOG_REGBYTES) & REG_MASK)
 
+/*
+ * The x0..x31 block of struct cpu_user_regs is not required to sit at the
+ * start of the structure, so anchor the offset at ->zero (x0) rather than
+ * at the structure itself.
+ */
 #define REG_PTR(insn, pos, regs)	\
-	(unsigned long *)((unsigned long)(regs) + REG_OFFSET(insn, pos))
+	(unsigned long *)((unsigned long)&(regs)->zero + REG_OFFSET(insn, pos))
 
 #define GET_RM(insn)			(((insn) >> 12) & 7)
 
