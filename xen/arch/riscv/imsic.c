@@ -1335,7 +1335,7 @@ static void imsic_vsfile_move(struct vcpu *v)
  * nor be moved to another one, so its file can't be in use elsewhere while
  * it is moved.
  */
-void imsic_migrate_vcpu(struct vcpu *v)
+void cf_check imsic_migrate_vcpu(struct vcpu *v)
 {
     ASSERT(v == current);
     ASSERT(!local_irq_is_enabled());

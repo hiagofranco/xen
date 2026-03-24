@@ -177,6 +177,8 @@ static void check_for_pcpu_work(void)
 {
     struct vcpu *curr = current;
 
+    vintc_enter_guest(curr);
+
     vcpu_sync_interrupts(curr);
 
     vcpu_flush_interrupts(curr);

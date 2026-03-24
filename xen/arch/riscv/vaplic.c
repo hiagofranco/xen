@@ -623,6 +623,13 @@ static const struct vintc_ops vintc_ops = {
      */
     .ctxt_switch_from = imsic_ctxt_switch_from,
     .ctxt_switch_to = imsic_ctxt_switch_to,
+    /*
+     * No .move_irqs: the scheduler calls arch_move_irqs() from any pCPU, and
+     * in sched_unit_migrate_finish() with the vCPU free to run on its new
+     * pCPU meanwhile, while a guest interrupt file can only be moved safely
+     * by the vCPU itself. It moves it on its way to the guest instead.
+     */
+    .enter_guest = imsic_migrate_vcpu,
 };
 
 int domain_vaplic_init(struct domain *d)

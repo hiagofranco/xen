@@ -70,6 +70,15 @@ struct vintc_ops {
 
     /* Restore vINTC state of the vCPU being switched in */
     void (*ctxt_switch_to)(struct vcpu *n);
+
+    /* Move interrupts of vCPU to a different pCPU */
+    void (*move_irqs)(struct vcpu *v);
+
+    /*
+     * Update vINTC state of the current vCPU, which is about to enter the
+     * guest.
+     */
+    void (*enter_guest)(struct vcpu *v);
 };
 
 struct vintc {
@@ -102,5 +111,7 @@ int vintc_reserve_virq(const struct domain *d, unsigned int virq);
 
 void vintc_ctxt_switch_from(struct vcpu *p);
 void vintc_ctxt_switch_to(struct vcpu *n);
+
+void vintc_enter_guest(struct vcpu *v);
 
 #endif /* RISCV_INTC_H */

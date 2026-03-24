@@ -204,3 +204,23 @@ void vintc_ctxt_switch_to(struct vcpu *n)
 
     ops->ctxt_switch_to(n);
 }
+
+/* Move vCPU's IRQs from one pCPU to another */
+void arch_move_irqs(struct vcpu *v)
+{
+    const struct vintc_ops *ops = v->domain->arch.vintc->ops;
+
+    if ( ops->move_irqs )
+        ops->move_irqs(v);
+}
+
+/* Update vINTC state of @v, the vCPU about to enter the guest. */
+void vintc_enter_guest(struct vcpu *v)
+{
+    const struct vintc_ops *ops = v->domain->arch.vintc->ops;
+
+    ASSERT(v == current);
+
+    if ( ops->enter_guest )
+        ops->enter_guest(v);
+}
