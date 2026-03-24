@@ -79,6 +79,64 @@ do {                            \
     csr_clear(CSR_SIREG, v);    \
 } while (0)
 
+#define imsic_vs_csr_write(c, v)    \
+do {                                \
+    csr_write(CSR_VSISELECT, c);    \
+    csr_write(CSR_VSIREG, v);       \
+} while ( 0 )
+
+/*
+ * Generic switchcase expansion pyramid.
+ * F is the per-operation leaf macro, ireg is the base register index.
+ * Optional extra args (e.g. an operation and/or a value) are forwarded to F
+ * via __VA_ARGS__.
+ *
+ * imsic_switchcase_break(ireg, op, v) - emit "case ireg: op(ireg,v); break;"
+ * imsic_switchcase_ret(ireg, op, ...) - emit "case ireg: return op(ireg[,v]);"
+ *   The variadic tail is optional so the same leaf works for both read (no v)
+ *   and swap (with v).
+ */
+#define imsic_switchcase_break(ireg, op, v) \
+    case ireg:                              \
+        op(ireg, v);                        \
+        break;
+
+#define imsic_switchcase_ret(ireg, op, ...) \
+    case ireg:                              \
+        return op(ireg, ##__VA_ARGS__);
+
+#define imsic_switchcase_2(F, ireg, ...)    \
+    F(ireg + 0, ##__VA_ARGS__)              \
+    F(ireg + 1, ##__VA_ARGS__)
+#define imsic_switchcase_4(F, ireg, ...)    \
+    imsic_switchcase_2(F, ireg + 0, ##__VA_ARGS__)  \
+    imsic_switchcase_2(F, ireg + 2, ##__VA_ARGS__)
+#define imsic_switchcase_8(F, ireg, ...)    \
+    imsic_switchcase_4(F, ireg + 0, ##__VA_ARGS__)  \
+    imsic_switchcase_4(F, ireg + 4, ##__VA_ARGS__)
+#define imsic_switchcase_16(F, ireg, ...)   \
+    imsic_switchcase_8(F, ireg + 0, ##__VA_ARGS__)  \
+    imsic_switchcase_8(F, ireg + 8, ##__VA_ARGS__)
+#define imsic_switchcase_32(F, ireg, ...)   \
+    imsic_switchcase_16(F, ireg + 0, ##__VA_ARGS__) \
+    imsic_switchcase_16(F, ireg + 16, ##__VA_ARGS__)
+#define imsic_switchcase_64(F, ireg, ...)   \
+    imsic_switchcase_32(F, ireg + 0, ##__VA_ARGS__) \
+    imsic_switchcase_32(F, ireg + 32, ##__VA_ARGS__)
+
+static void imsic_eix_write(int ireg, unsigned long val)
+{
+    switch ( ireg )
+    {
+    imsic_switchcase_64(imsic_switchcase_break, IMSIC_EIP0,
+                         imsic_vs_csr_write, val)
+    imsic_switchcase_64(imsic_switchcase_break, IMSIC_EIE0,
+                         imsic_vs_csr_write, val)
+    default:
+        ASSERT_UNREACHABLE();
+    }
+}
+
 bool imsic_has_interrupt(const struct vcpu *vcpu)
 {
     struct vimsic_state *imsic_state = vcpu->arch.vimsic_state;
@@ -801,8 +859,43 @@ int __init vimsic_make_domu_dt_node(struct kernel_info *kinfo,
     return fdt_end_node(fdt);
 }
 
+static void imsic_vsfile_local_clear(int vsfile_hgei, unsigned int nr_eix)
+{
+    unsigned  int i;
+    unsigned long new_hstatus, old_hstatus, old_vsiselect;
+
+    /* We can only zero-out if we have a IMSIC VS-file */
+    if ( vsfile_hgei <= 0 )
+        return;
+
+    old_vsiselect = csr_read(CSR_VSISELECT);
+    old_hstatus = csr_read(CSR_HSTATUS);
+    new_hstatus = old_hstatus & ~HSTATUS_VGEIN;
+    new_hstatus |= ((unsigned long)vsfile_hgei) << HSTATUS_VGEIN_SHIFT;
+    csr_write(CSR_HSTATUS, new_hstatus);
+
+    imsic_vs_csr_write(IMSIC_EIDELIVERY, 0);
+    imsic_vs_csr_write(IMSIC_EITHRESHOLD, 0);
+
+    for ( i = 0; i < nr_eix; i++ )
+    {
+        imsic_eix_write(IMSIC_EIP0 + i * 2, 0);
+        imsic_eix_write(IMSIC_EIE0 + i * 2, 0);
+#ifdef CONFIG_RISCV_32
+        imsic_eix_write(IMSIC_EIP0 + i * 2 + 1, 0);
+        imsic_eix_write(IMSIC_EIE0 + i * 2 + 1, 0);
+#endif
+    }
+
+    csr_write(CSR_HSTATUS, old_hstatus);
+    csr_write(CSR_VSISELECT, old_vsiselect);
+}
+
 void imsic_migrate_vcpu(struct vcpu *v)
 {
+    unsigned int new_vsfile_hgei;
+    unsigned int nr_hw_eix = DIV_ROUND_UP(imsic_cfg.nr_ids,
+                                          BITS_PER_TYPE(uint64_t));
     struct vimsic_state *imsic_state = v->arch.vimsic_state;
     unsigned long flags;
     unsigned int old_vsfile_id;
@@ -824,6 +917,16 @@ void imsic_migrate_vcpu(struct vcpu *v)
      */
     if ( v->arch.last_pcpu == NR_CPUS )
         return;
+
+    /*
+     * At this point, all interrupt producers are still using the old IMSIC
+     * VS-file.
+     */
+
+    new_vsfile_hgei = vgein_assign(v);
+
+    /* Zero-out new IMSIC VS-file */
+    imsic_vsfile_local_clear(new_vsfile_hgei, nr_hw_eix);
 
     BUG_ON("unimplemented");
 }
