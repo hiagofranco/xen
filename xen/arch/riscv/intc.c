@@ -177,3 +177,11 @@ void vintc_state_restore(struct vcpu *vcpu)
 
     ops->restore_state(vcpu);
 }
+
+/* Move vCPU's IRQs from one pCPU to another */
+void arch_move_irqs(struct vcpu *v)
+{
+    struct vintc *vintc = v->domain->arch.vintc;
+
+    vintc->ops->move_irqs(v);
+}

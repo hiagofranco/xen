@@ -41,6 +41,14 @@ unsigned int __ro_after_init guest_aplic_num_sources;
  */
 #define regoffset_to_word_idx(reg_val) ((reg_val) / sizeof(uint32_t))
 
+static void cf_check vaplic_move_irqs(struct vcpu *v)
+{
+    /* At the moment, we support only the case with MSI support */
+    BUG_ON(!has_msi_support());
+
+    imsic_migrate_vcpu(v);
+}
+
 static inline uint32_t generate_auth_mask(const struct domain *d,
                                           unsigned int word_idx)
 {
@@ -421,6 +429,7 @@ static const struct vintc_ops vintc_ops = {
     .vcpu_deinit = vaplic_deinit,
     .store_state = vaplic_state_save,
     .restore_state = vaplic_state_restore,
+    .move_irqs = vaplic_move_irqs,
 };
 
 int domain_vaplic_init(struct domain *d)

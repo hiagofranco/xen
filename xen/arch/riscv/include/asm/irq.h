@@ -41,10 +41,7 @@ struct irq_desc *irq_to_desc(unsigned int irq);
 struct cpu_user_regs;
 struct dt_device_node;
 
-static inline void arch_move_irqs(struct vcpu *v)
-{
-    BUG_ON("unimplemented");
-}
+void arch_move_irqs(struct vcpu *v);
 
 int platform_get_irq(const struct dt_device_node *device, int index);
 

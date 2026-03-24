@@ -70,6 +70,9 @@ struct vintc_ops {
 
     /* Restore virtual interrupt controller state */
     void (*restore_state)(struct vcpu *v);
+
+    /* Move interrupts of vCPU to a different pCPU */
+    void (*move_irqs)(struct vcpu *v);
 };
 
 struct vintc {

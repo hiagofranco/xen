@@ -115,4 +115,6 @@ void imsic_state_restore(struct vcpu *v);
 
 bool imsic_has_interrupt(const struct vcpu *vcpu);
 
+void imsic_migrate_vcpu(struct vcpu *v);
+
 #endif /* ASM_RISCV_IMSIC_H */

@@ -800,3 +800,8 @@ int __init vimsic_make_domu_dt_node(struct kernel_info *kinfo,
 
     return fdt_end_node(fdt);
 }
+
+void imsic_migrate_vcpu(struct vcpu *v)
+{
+    BUG_ON("unimplemented");
+}
