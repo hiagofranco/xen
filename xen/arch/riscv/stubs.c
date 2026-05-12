@@ -52,13 +52,6 @@ int arch_monitor_domctl_event(struct domain *d,
     BUG_ON("unimplemented");
 }
 
-/* smp.c */
-
-void smp_send_call_function_mask(const cpumask_t *mask)
-{
-    BUG_ON("unimplemented");
-}
-
 /* irq.c */
 
 void irq_ack_none(struct irq_desc *desc)
