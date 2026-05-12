@@ -22,3 +22,20 @@ void smp_send_event_check_mask(const cpumask_t *mask)
 {
     ipi_send_mask(IPI_EVENT_CHECK, mask);
 }
+
+void smp_send_call_function_mask(const cpumask_t *mask)
+{
+    cpumask_t target;
+    unsigned int cpu = smp_processor_id();
+
+    cpumask_andnot(&target, mask, cpumask_of(cpu));
+
+    ipi_send_mask(IPI_CALL_FUNCTION, &target);
+
+    if ( cpumask_test_cpu(cpu, mask) )
+    {
+        local_irq_disable();
+        smp_call_function_interrupt();
+        local_irq_enable();
+    }
+}
