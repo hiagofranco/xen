@@ -31,6 +31,7 @@
 #include <asm/early_printk.h>
 #include <asm/fixmap.h>
 #include <asm/intc.h>
+#include <asm/ipi.h>
 #include <asm/page.h>
 #include <asm/p2m.h>
 #include <asm/sbi.h>
@@ -207,6 +208,8 @@ void __init noreturn start_xen(unsigned long bootcpu_id,
     rcu_init();
 
     setup_system_domains();
+
+    ipi_init(sbi_send_ipi);
 
     local_irq_enable();
 

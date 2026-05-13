@@ -12,6 +12,7 @@ obj-y += extable.o
 obj-y += guestcopy.o
 obj-y += imsic.o
 obj-y += intc.o
+obj-y += ipi.o
 obj-y += irq.o
 obj-y += kernel.init.o
 obj-y += mm.o
