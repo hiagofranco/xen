@@ -17,6 +17,8 @@
 #include <asm/emulate.h>
 #include <asm/extable.h>
 #include <asm/intc.h>
+#include <asm/ipi.h>
+#include <asm/mmio.h>
 #include <asm/processor.h>
 #include <asm/riscv_encoding.h>
 #include <asm/traps.h>
@@ -32,8 +34,6 @@ void trap_init(void)
     unsigned long addr = (unsigned long)&handle_trap;
 
     csr_write(CSR_STVEC, addr);
-
-    csr_set(CSR_SIE, SIP_SSIP);
 }
 
 static const char *decode_trap_cause(unsigned long cause)
@@ -301,8 +301,7 @@ void do_trap(struct cpu_user_regs *cpu_regs)
             switch ( icause )
             {
             case IRQ_S_SOFT:
-                csr_clear(CSR_SIP, SIP_SSIP);
-                /* Nothing to do, will check for events on return path */
+                ipi_handler();
                 break;
 
             case IRQ_S_EXT:
