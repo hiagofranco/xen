@@ -1,6 +1,7 @@
 #include <xen/cpumask.h>
 #include <xen/smp.h>
 
+#include <asm/ipi.h>
 #include <asm/sbi.h>
 
 /*
@@ -19,5 +20,5 @@ struct pcpu_info pcpu_info[NR_CPUS] = { [0 ... NR_CPUS - 1] = {
 
 void smp_send_event_check_mask(const cpumask_t *mask)
 {
-    sbi_send_ipi(mask);
+    ipi_send_mask(IPI_EVENT_CHECK, mask);
 }
