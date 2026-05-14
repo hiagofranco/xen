@@ -71,6 +71,7 @@
 #define APLIC_SETIPNUM_LE               0x2000
 
 #define APLIC_GENMSI                    0x3000
+#define APLIC_GENMSI_BUSY               BIT(12, U)
 
 #define APLIC_TARGET_BASE               0x3004
 #define APLIC_TARGET_LAST               0x3ffc
@@ -154,5 +155,7 @@ bool has_msi_support(void);
 void aplic_reconfigure_target(const struct vcpu *v,
                               unsigned int old_guest_file_id,
                               unsigned long old_pcpu);
+
+void aplic_genmsi_barrier(void);
 
 #endif /* ASM_RISCV_APLIC_H */

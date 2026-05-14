@@ -65,6 +65,14 @@ struct imsic_config {
     /* Number off interrupt identities */
     unsigned int nr_ids;
 
+    /*
+     * Interrupt identity reserved exclusively for APLIC-to-hart
+     * synchronization.
+     *
+     * Must not be allocated to any interrupt source.
+     */
+    unsigned int sync_id;
+
     /* MSI */
     const struct imsic_msi *msi;
 

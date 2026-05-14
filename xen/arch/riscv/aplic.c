@@ -27,7 +27,9 @@
 #include <asm/imsic.h>
 #include <asm/intc.h>
 #include <asm/io.h>
+#include <asm/processor.h>
 #include <asm/riscv_encoding.h>
+#include <asm/smp.h>
 
 #define APLIC_DEFAULT_PRIORITY  1
 
@@ -138,6 +140,30 @@ void aplic_hw_write_reg(unsigned int offset, uint32_t value)
 bool has_msi_support(void)
 {
     return readl(&aplic.regs->domaincfg) & APLIC_DOMAINCFG_DM;
+}
+
+/*
+ * As needed, synchronize with all IOMMUs and APLICs to ensure that no
+ * straggler MSIs will arrive at the old interrupt file after this step.
+ */
+void aplic_genmsi_barrier(void)
+{
+    const struct imsic_config *imsic = imsic_get_config();
+    unsigned long hartid = cpuid_to_hartid(smp_processor_id());
+    unsigned long flags;
+    uint32_t val;
+
+    val = (aplic_hart_field(hartid) << APLIC_TARGET_HART_IDX_SHIFT) |
+          (imsic->sync_id & APLIC_TARGET_EIID_MASK);
+
+    spin_lock_irqsave(&aplic.lock, flags);
+
+    writel(val, &aplic.regs->genmsi);
+
+    while ( readl(&aplic.regs->genmsi) & APLIC_GENMSI_BUSY )
+        cpu_relax();
+
+    spin_unlock_irqrestore(&aplic.lock, flags);
 }
 
 static void __init aplic_init_hw_interrupts(void)

@@ -228,6 +228,14 @@ void imsic_irq_enable(unsigned int irq)
      */
     ASSERT(!local_irq_is_enabled());
 
+    if ( irq == imsic_cfg.sync_id )
+    {
+        printk("irq%u is reserved for APLIC sync so shouldn't be set by %s\n",
+               irq, __func__);
+
+        return;
+    }
+
     spin_lock(&imsic_cfg.lock);
     /*
      * There is no irq - 1 here (look at aplic_set_irq_type()) because:
@@ -409,6 +417,9 @@ static int __init imsic_parse_node(const struct dt_device_node *node,
                node->name);
         return -ENOENT;
     }
+
+    /* Reserve last identity for APLIC-to-hart synchronization */
+    imsic_cfg.sync_id = imsic_cfg.nr_ids;
 
     /* Compute base address */
     *nr_mmios = 0;
