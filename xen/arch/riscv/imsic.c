@@ -115,6 +115,12 @@ do {                            \
     csr_swap(CSR_VSIREG, v);        \
 })
 
+#define imsic_vs_csr_set(c, v)      \
+do {                                \
+    csr_write(CSR_VSISELECT, c);    \
+    csr_set(CSR_VSIREG, v);         \
+} while (0)
+
 #define imsic_vs_csr_write(c, v)    \
 do {                                \
     csr_write(CSR_VSISELECT, c);    \
@@ -154,6 +160,15 @@ static uint64_t imsic_eix_swap64(unsigned int ireg, uint64_t val)
         old |= (uint64_t)imsic_vs_csr_swap(ireg + 1, val >> 32) << 32;
 
     return old;
+}
+
+/* Set bits of a whole 64-bit EIx group (see imsic_eix_check()). */
+static void imsic_eix_set64(unsigned int ireg, uint64_t val)
+{
+    imsic_eix_check(ireg);
+    imsic_vs_csr_set(ireg, val);
+    if ( IS_ENABLED(CONFIG_RISCV_32) )
+        imsic_vs_csr_set(ireg + 1, val >> 32);
 }
 
 unsigned int vcpu_guest_file_id(const struct vcpu *v)
@@ -1087,6 +1102,42 @@ int __init vimsic_make_domu_dt_node(struct kernel_info *kinfo,
     return fdt_end_node(fdt);
 }
 
+static void imsic_vsfile_local_update(const struct imsic_vsfile_data *idata)
+{
+    unsigned int i;
+    const struct imsic_mrif *mrif = idata->mrif;
+    struct imsic_vsfile_ctx ctx;
+    unsigned long flags;
+
+    /* We can only update if we have a HW IMSIC context */
+    if ( !idata->hgei )
+        return;
+
+    /*
+     * No atomic accessors are needed to read the values out of the MRIF here,
+     * as this is always called with a pointer to a temporary MRIF on the
+     * stack.
+     */
+
+    /* Nothing on this pCPU is to run with the file selected meanwhile. */
+    local_irq_save(flags);
+
+    imsic_vsfile_select(idata->hgei, &ctx);
+
+    for ( i = 0; i < idata->nr_eix; i++ )
+    {
+        imsic_eix_set64(IMSIC_EIP0 + i * 2, mrif->eix[i].eip);
+        imsic_eix_set64(IMSIC_EIE0 + i * 2, mrif->eix[i].eie);
+    }
+
+    imsic_vs_csr_write(IMSIC_EITHRESHOLD, mrif->eithreshold);
+    imsic_vs_csr_write(IMSIC_EIDELIVERY, mrif->eidelivery);
+
+    imsic_vsfile_deselect(&ctx);
+
+    local_irq_restore(flags);
+}
+
 /*
  * Take a h/w guest interrupt file on the pCPU @v runs on and make it the
  * vCPU's one.
@@ -1270,7 +1321,10 @@ static void imsic_vsfile_move(struct vcpu *v)
     /* Free-up old IMSIC VS-file */
     vgein_release(v, old_vsfile_id, old_vsfile_cpu);
 
-    BUG_ON("unimplemented");
+    /* Restore register state in the new IMSIC VS-file */
+    imsic_vsfile_local_update(&vsfile_data);
+
+    imsic_vsfile_set_vgein(v, vsfile_data.hgei);
 }
 
 /*
