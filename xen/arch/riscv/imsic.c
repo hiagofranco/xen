@@ -803,5 +803,27 @@ int __init vimsic_make_domu_dt_node(struct kernel_info *kinfo,
 
 void imsic_migrate_vcpu(struct vcpu *v)
 {
+    struct vimsic_state *imsic_state = v->arch.vimsic_state;
+    unsigned long flags;
+    unsigned int old_vsfile_id;
+
+    read_lock_irqsave(&imsic_state->vsfile_lock, flags);
+    old_vsfile_id = imsic_state->guest_file_id;
+    read_unlock_irqrestore(&imsic_state->vsfile_lock, flags);
+
+    /*
+     * The scheduler can mark a freshly created vCPU's unit as migrated and
+     * invoke this before the vCPU has ever run (see the migrated branch in
+     * schedule()). Such a vCPU still holds its initial software IMSIC VS-file
+     * state, and its first run will assign a real VS-file via vcpu_aia_init().
+     * Migrating it now would either hit the unsupported SW-file path or leak
+     * the VS-file that vcpu_aia_init() subsequently assigns, so skip it.
+     *
+     * TODO: this check could be dropped when IMSIC sw interrupt file support
+     *       will be added.
+     */
+    if ( v->arch.last_pcpu == NR_CPUS )
+        return;
+
     BUG_ON("unimplemented");
 }
