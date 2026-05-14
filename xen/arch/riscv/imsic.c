@@ -57,6 +57,25 @@ static unsigned int __ro_after_init guest_num_msis;
  */
 #define GUEST_IMSIC_MAX_MSIS 255U
 
+#define IMSIC_MAX_EIX (IMSIC_MAX_ID / BITS_PER_TYPE(uint64_t))
+
+struct imsic_mrif_eix {
+    unsigned long eip[BITS_PER_TYPE(uint64_t) / BITS_PER_LONG];
+    unsigned long eie[BITS_PER_TYPE(uint64_t) / BITS_PER_LONG];
+};
+
+struct imsic_mrif {
+    struct imsic_mrif_eix eix[IMSIC_MAX_EIX];
+    unsigned long eithreshold;
+    unsigned long eidelivery;
+};
+
+struct imsic_vsfile_read_data {
+    int hgei;
+    unsigned int nr_eix;
+    struct imsic_mrif *mrif;
+};
+
 #define IMSIC_DISABLE_EIDELIVERY    0
 #define IMSIC_ENABLE_EIDELIVERY     1
 #define IMSIC_DISABLE_EITHRESHOLD   1
@@ -87,6 +106,14 @@ do {                            \
     csr_write(CSR_SISELECT, c); \
     csr_clear(CSR_SIREG, v);    \
 } while (0)
+
+#define imsic_vs_csr_swap(c, v)     \
+({                                  \
+    unsigned long r;                \
+    csr_write(CSR_VSISELECT, c);    \
+    r = csr_swap(CSR_VSIREG, v);    \
+    r;                              \
+})
 
 #define imsic_vs_csr_write(c, v)    \
 do {                                \
@@ -132,6 +159,21 @@ do {                                \
 #define imsic_switchcase_64(F, ireg, ...)   \
     imsic_switchcase_32(F, ireg + 0, ##__VA_ARGS__) \
     imsic_switchcase_32(F, ireg + 32, ##__VA_ARGS__)
+
+static unsigned long imsic_eix_swap(int ireg, unsigned long val)
+{
+    switch ( ireg )
+    {
+    imsic_switchcase_64(imsic_switchcase_ret, IMSIC_EIP0,
+                        imsic_vs_csr_swap, val)
+    imsic_switchcase_64(imsic_switchcase_ret, IMSIC_EIE0,
+                        imsic_vs_csr_swap, val)
+    default:
+        ASSERT_UNREACHABLE();
+    }
+
+    return 0;
+}
 
 static void imsic_eix_write(int ireg, unsigned long val)
 {
@@ -920,6 +962,61 @@ static void imsic_vsfile_local_clear(int vsfile_hgei, unsigned int nr_eix)
     csr_write(CSR_VSISELECT, old_vsiselect);
 }
 
+static void imsic_vsfile_local_read(void *data)
+{
+    unsigned int i;
+    struct imsic_mrif_eix *eix;
+    struct imsic_vsfile_read_data *idata = data;
+    struct imsic_mrif *mrif = idata->mrif;
+    unsigned long new_hstatus, old_hstatus, old_vsiselect;
+
+    old_vsiselect = csr_read(CSR_VSISELECT);
+    old_hstatus = csr_read(CSR_HSTATUS);
+    new_hstatus = old_hstatus & ~HSTATUS_VGEIN;
+    new_hstatus |= ((unsigned long)idata->hgei) << HSTATUS_VGEIN_SHIFT;
+    csr_write(CSR_HSTATUS, new_hstatus);
+
+    /*
+     * There is no need to use atomic functions version to store
+     * values in MRIF because imsic_vsfile_read() is always called
+     * with pointer to temporary MRIF on stack.
+     */
+
+    mrif->eidelivery = imsic_vs_csr_swap(IMSIC_EIDELIVERY, 0);
+    mrif->eithreshold = imsic_vs_csr_swap(IMSIC_EITHRESHOLD, 0);
+    for ( i = 0; i < idata->nr_eix; i++ )
+    {
+        eix = &mrif->eix[i];
+        eix->eip[0] = imsic_eix_swap(IMSIC_EIP0 + i * 2, 0);
+        eix->eie[0] = imsic_eix_swap(IMSIC_EIE0 + i * 2, 0);
+#ifdef CONFIG_RISCV_32
+        eix->eip[1] = imsic_eix_swap(IMSIC_EIP0 + i * 2 + 1, 0);
+        eix->eie[1] = imsic_eix_swap(IMSIC_EIE0 + i * 2 + 1, 0);
+#endif
+   }
+
+    csr_write(CSR_HSTATUS, old_hstatus);
+    csr_write(CSR_VSISELECT, old_vsiselect);
+}
+
+static void imsic_vsfile_read(int vsfile_hgei, int vsfile_cpu,
+                              unsigned int nr_eix, bool clear,
+                              struct imsic_mrif *mrif)
+{
+    struct imsic_vsfile_read_data idata;
+
+    /* We can only read clear if we have a IMSIC VS-file */
+    if ( vsfile_cpu < 0 || vsfile_hgei <= 0 )
+        return;
+
+    /* We can only read clear on local CPU */
+    idata.hgei = vsfile_hgei;
+    idata.nr_eix = nr_eix;
+    idata.mrif = mrif;
+    on_selected_cpus(cpumask_of(vsfile_cpu),
+                     imsic_vsfile_local_read, &idata, 1);
+}
+
 void imsic_migrate_vcpu(struct vcpu *v)
 {
     unsigned int new_vsfile_hgei;
@@ -929,6 +1026,7 @@ void imsic_migrate_vcpu(struct vcpu *v)
     unsigned long flags;
     unsigned int old_vsfile_id;
     unsigned long old_vsfile_pcpu;
+    struct imsic_mrif tmrif;
 
     read_lock_irqsave(&imsic_state->vsfile_lock, flags);
     old_vsfile_id = imsic_state->guest_file_id;
@@ -991,6 +1089,20 @@ void imsic_migrate_vcpu(struct vcpu *v)
      * At this point, all interrupt producers have been moved
      * to the new IMSIC VS-file.
      */
+
+    memset(&tmrif, 0, sizeof(tmrif));
+
+    if ( old_vsfile_pcpu != NR_CPUS )
+    {
+          /* Read and clear register state from old IMSIC VS-file */
+        imsic_vsfile_read(old_vsfile_id, hartid_to_cpuid(old_vsfile_pcpu),
+                          nr_hw_eix, true, &tmrif);
+
+        /* Free-up old IMSIC VS-file */
+        vgein_release(v, old_vsfile_id, hartid_to_cpuid(old_vsfile_pcpu));
+    }
+    else
+        panic("IMSIC SW-file isn't supported\n");
 
     BUG_ON("unimplemented");
 }

@@ -13,7 +13,7 @@ bool aia_usable(void);
 void aia_init(void);
 
 unsigned int vgein_assign(struct vcpu *v);
-void vgein_release(struct vcpu *v, unsigned int vgein_id);
+void vgein_release(struct vcpu *v, unsigned int vgein_id, unsigned long cpu);
 
 void vcpu_aia_init(struct vcpu *v);
 

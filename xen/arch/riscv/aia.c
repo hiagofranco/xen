@@ -214,10 +214,10 @@ unsigned int vgein_assign(struct vcpu *v)
     return vgein_id;
 }
 
-void vgein_release(struct vcpu *v, unsigned int vgein_id)
+void vgein_release(struct vcpu *v, unsigned int vgein_id, unsigned long cpu)
 {
     unsigned long flags;
-    struct vgein_ctrl *vgein = &per_cpu(vgein, v->processor);
+    struct vgein_ctrl *vgein = &per_cpu(vgein, cpu);
 
     if ( !vgein_id )
         return;
