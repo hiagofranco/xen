@@ -58,6 +58,28 @@ static unsigned int __ro_after_init guest_num_msis;
  */
 #define GUEST_IMSIC_MAX_MSIS 255U
 
+/*
+ * The interrupt identities an IMSIC interrupt file provides are 0 (which is
+ * never valid, but still occupies a bit) up to IMSIC_MAX_ID inclusive, so
+ * IMSIC_MAX_ID + 1 bits have to be covered.
+ *
+ * Each EIx group covers 64 identities, matching the memory-resident interrupt
+ * file (MRIF) layout from the AIA spec, where pending and enable bits are
+ * stored as pairs of 64-bit doublewords.
+ */
+#define IMSIC_MAX_EIX DIV_ROUND_UP(IMSIC_MAX_ID + 1, 64)
+
+struct imsic_mrif_eix {
+    uint64_t eip;
+    uint64_t eie;
+};
+
+struct imsic_mrif {
+    struct imsic_mrif_eix eix[IMSIC_MAX_EIX];
+    unsigned long eithreshold;
+    unsigned long eidelivery;
+};
+
 #define IMSIC_DISABLE_EIDELIVERY    0
 #define IMSIC_ENABLE_EIDELIVERY     1
 #define IMSIC_DISABLE_EITHRESHOLD   1
@@ -87,6 +109,12 @@ do {                            \
     csr_clear(CSR_SIREG, v);    \
 } while (0)
 
+#define imsic_vs_csr_swap(c, v)     \
+({                                  \
+    csr_write(CSR_VSISELECT, c);    \
+    csr_swap(CSR_VSIREG, v);        \
+})
+
 #define imsic_vs_csr_write(c, v)    \
 do {                                \
     csr_write(CSR_VSISELECT, c);    \
@@ -113,6 +141,19 @@ static void imsic_eix_write64(unsigned int ireg, uint64_t val)
     imsic_vs_csr_write(ireg, val);
     if ( IS_ENABLED(CONFIG_RISCV_32) )
         imsic_vs_csr_write(ireg + 1, val >> 32);
+}
+
+/* Swap a whole 64-bit EIx group (see imsic_eix_check()). */
+static uint64_t imsic_eix_swap64(unsigned int ireg, uint64_t val)
+{
+    uint64_t old;
+
+    imsic_eix_check(ireg);
+    old = imsic_vs_csr_swap(ireg, val);
+    if ( IS_ENABLED(CONFIG_RISCV_32) )
+        old |= (uint64_t)imsic_vs_csr_swap(ireg + 1, val >> 32) << 32;
+
+    return old;
 }
 
 unsigned int vcpu_guest_file_id(const struct vcpu *v)
@@ -574,6 +615,8 @@ struct imsic_vsfile_data {
     unsigned int hgei;
     /* Number of 64-bit EIx groups to cover, see imsic_cfg.nr_eix. */
     unsigned int nr_eix;
+    /* Where the interrupt file state is saved to or restored from. */
+    struct imsic_mrif *mrif;
 };
 
 /* The state of this hart imsic_vsfile_select() changes. */
@@ -690,6 +733,56 @@ static void imsic_vsfile_local_clear(const struct imsic_vsfile_data *idata)
     imsic_vsfile_deselect(&ctx);
 
     local_irq_restore(flags);
+}
+
+/*
+ * Stop observing an interrupt file which a vCPU leaves when it moves to
+ * another pCPU, by clearing the bit imsic_ctxt_switch_from() set.
+ */
+static void imsic_local_hgeie_clear(unsigned int hgei)
+{
+    csr_clear(CSR_HGEIE, BIT(hgei, UL));
+}
+
+static void
+imsic_vsfile_local_read_clear(const struct imsic_vsfile_data *idata)
+{
+    unsigned int i;
+    struct imsic_mrif *mrif = idata->mrif;
+    struct imsic_vsfile_ctx ctx;
+
+    imsic_local_hgeie_clear(idata->hgei);
+
+    imsic_vsfile_select(idata->hgei, &ctx);
+
+    /*
+     * No atomic accessors are needed to store the values into the MRIF here,
+     * as imsic_vsfile_move() always passes it a pointer to a temporary MRIF
+     * on the stack.
+     */
+
+    mrif->eidelivery = imsic_vs_csr_swap(IMSIC_EIDELIVERY, 0);
+    mrif->eithreshold = imsic_vs_csr_swap(IMSIC_EITHRESHOLD, 0);
+    for ( i = 0; i < idata->nr_eix; i++ )
+    {
+        mrif->eix[i].eip = imsic_eix_swap64(IMSIC_EIP0 + i * 2, 0);
+        mrif->eix[i].eie = imsic_eix_swap64(IMSIC_EIE0 + i * 2, 0);
+    }
+
+    imsic_vsfile_deselect(&ctx);
+}
+
+/*
+ * Make sure that the MSIs already sent to the interrupt file @data names have
+ * arrived there, then save and clear the file. Both have to be done by the
+ * pCPU owning the file, and doing them together takes a single IPI.
+ */
+static void cf_check imsic_vsfile_local_drain(void *data)
+{
+    const struct imsic_vsfile_data *idata = data;
+
+    imsic_aplic_sync(data);
+    imsic_vsfile_local_read_clear(idata);
 }
 
 void cf_check vcpu_imsic_deinit(struct vcpu *v)
@@ -1129,6 +1222,7 @@ static void imsic_vsfile_move(struct vcpu *v)
 {
     struct imsic_vsfile_data vsfile_data = {
         .nr_eix = imsic_cfg.nr_eix,
+        .mrif = &(struct imsic_mrif){ },
     };
     struct vimsic_state *imsic_state = v->arch.vimsic_state;
     unsigned long flags;
@@ -1161,18 +1255,20 @@ static void imsic_vsfile_move(struct vcpu *v)
     vaplic_reconfigure_target(v);
 
     /*
-     * Synchronizing interactions between a hart and the APLIC.
-     *
-     * The MSIs to be flushed are the ones still on their way to the old
-     * interrupt file, so the barrier has to be done by the pCPU which owns
-     * that file.
+     * Synchronize with the APLIC, so that no straggler MSI reaches the old
+     * interrupt file anymore, then read and clear the old file's register
+     * state into the MRIF. Both have to be done by the pCPU owning the old
+     * file.
      */
-    imsic_call_on_cpu(old_vsfile_cpu, imsic_aplic_sync, NULL);
+    imsic_call_on_cpu(old_vsfile_cpu, imsic_vsfile_local_drain,
+                      &(struct imsic_vsfile_data){
+                          .hgei = old_vsfile_id,
+                          .nr_eix = vsfile_data.nr_eix,
+                          .mrif = vsfile_data.mrif,
+                      });
 
-    /*
-     * At this point, all interrupt producers have been moved
-     * to the new IMSIC VS-file.
-     */
+    /* Free-up old IMSIC VS-file */
+    vgein_release(v, old_vsfile_id, old_vsfile_cpu);
 
     BUG_ON("unimplemented");
 }
