@@ -17,6 +17,7 @@
 #include <asm/intc.h>
 
 struct domain;
+struct vcpu;
 
 #define to_vaplic(d) container_of((d)->arch.vintc, struct vaplic, vintc)
 
@@ -49,5 +50,7 @@ struct vaplic {
 
 int domain_vaplic_init(struct domain *d);
 void domain_vaplic_deinit(struct domain *d);
+
+void vaplic_reconfigure_target(const struct vcpu *v);
 
 #endif /* RISCV_VAPLIC_H */

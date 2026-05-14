@@ -129,7 +129,11 @@ static unsigned long aplic_hart_index(unsigned int cpu)
 /*
  * v->processor can't be used here: during a migration it names the new pCPU
  * before the interrupt file is moved there. The caller has to hold
- * vsfile_lock until the result is written to the h/w.
+ * vsfile_lock, so that the guest file id and the pCPU owning it are read as
+ * a consistent pair. A value may still be built from the old file just
+ * before a migration publishes the new one, so whoever publishes a new file
+ * has to call vaplic_reconfigure_target() afterwards, to rewrite every
+ * source targeting the vCPU.
  */
 uint32_t aplic_msi_target_gen(const struct vcpu *v, uint32_t base_val)
 {
@@ -139,6 +143,13 @@ uint32_t aplic_msi_target_gen(const struct vcpu *v, uint32_t base_val)
 
     ASSERT(rw_is_locked(&vimsic_state->vsfile_lock));
     ASSERT(vimsic_state->vsfile_cpu < NR_CPUS);
+
+    /*
+     * The callers rely on the physical APLIC being in MSI delivery mode.
+     * Checking that here rather than in each of them means none can be
+     * missed should direct delivery mode ever be supported.
+     */
+    ASSERT(aplic_msi_mode());
 
     hart_index = aplic_hart_index(vimsic_state->vsfile_cpu);
 

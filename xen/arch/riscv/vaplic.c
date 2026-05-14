@@ -169,6 +169,66 @@ static void vaplic_target_write(const struct domain *d, unsigned int irqn,
     spin_unlock_irqrestore(&src->lock, flags);
 }
 
+/* Decode the target vCPU from a TARGET snapshot (NULL if none). */
+static struct vcpu *vaplic_target_decode_vcpu(const struct domain *d,
+                                              uint32_t target)
+{
+    unsigned int hart_idx = MASK_EXTR(target, APLIC_TARGET_HART_IDX);
+
+    /*
+     * Skip a source whose EIID is 0: interrupt identity 0 is never valid at
+     * an IMSIC, so such a source delivers nothing and needs no retargeting.
+     * The AIA spec leaves target[] UNSPECIFIED after reset, but the vAPLIC
+     * state is zero-initialized, so this also covers every source the guest
+     * hasn't programmed yet, which would otherwise decode as targeting vCPU0
+     * (hart index 0) and have its h/w TARGET register needlessly rewritten
+     * on every vCPU0 migration.
+     * The hart index range check is only a guard: the write path refuses to
+     * record values with an out-of-range hart index.
+     */
+    if ( !(target & APLIC_TARGET_EIID) || hart_idx >= d->max_vcpus )
+        return NULL;
+
+    return d->vcpu[hart_idx];
+}
+
+void vaplic_reconfigure_target(const struct vcpu *v)
+{
+    struct domain *d = v->domain;
+    struct vaplic *vaplic = to_vaplic(d);
+    struct vimsic_state *vimsic_state = v->arch.vimsic_state;
+    unsigned int irqn;
+
+    bitmap_for_each ( irqn, d->arch.vintc->hw_irqs, d->arch.vintc->nr_virqs )
+    {
+        struct vaplic_source *src = &vaplic->regs.sources[irqn];
+        unsigned long flags;
+        uint32_t target;
+
+        /* APLIC interrupt sources start from 1, there is no source 0. */
+        if ( !irqn )
+            continue;
+
+        spin_lock_irqsave(&src->lock, flags);
+
+        target = read_atomic(&src->target);
+
+        if ( vaplic_target_decode_vcpu(d, target) == v )
+        {
+            /*
+             * IRQs are already off under src->lock so no need for *_irqsave
+             * here.
+             */
+            read_lock(&vimsic_state->vsfile_lock);
+            aplic_hw_write_reg(offsetof(struct aplic_regs, target[irqn - 1]),
+                               aplic_msi_target_gen(v, target));
+            read_unlock(&vimsic_state->vsfile_lock);
+        }
+
+        spin_unlock_irqrestore(&src->lock, flags);
+    }
+}
+
 static uint32_t generate_auth_mask(const struct domain *currd,
                                    unsigned int word_idx)
 {
