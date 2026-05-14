@@ -69,6 +69,29 @@ struct imsic_config {
     spinlock_t lock;
 };
 
+/*
+ * The identities of Xen's own interrupt file are allocated statically:
+ *  - the reserved ones are taken from the top down; so far that's only the
+ *    last one, nr_ids, for APLIC-to-hart synchronization;
+ *  - 1 .. imsic_nr_free_ids(), i.e. all those below the reserved ones, are
+ *    left for the APLIC sources, as Xen gives source N the EIID N
+ *    (aplic_init() drops the sources which don't fit).
+ * A new reserved identity has to be taken below the lowest one reserved so
+ * far, with imsic_nr_free_ids() lowered accordingly.
+ */
+
+/* Interrupt identity reserved for APLIC-to-hart synchronization. */
+static inline unsigned int imsic_sync_id(const struct imsic_config *cfg)
+{
+    return cfg->nr_ids;
+}
+
+/* Interrupt identities 1 .. imsic_nr_free_ids() aren't reserved. */
+static inline unsigned int imsic_nr_free_ids(const struct imsic_config *cfg)
+{
+    return imsic_sync_id(cfg) - 1;
+}
+
 struct vimsic_state {
     /* IMSIC VS-file */
     rwlock_t vsfile_lock;

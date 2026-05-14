@@ -27,7 +27,9 @@
 #include <asm/imsic.h>
 #include <asm/intc.h>
 #include <asm/io.h>
+#include <asm/processor.h>
 #include <asm/riscv_encoding.h>
+#include <asm/smp.h>
 
 static struct aplic_priv aplic = {
     .lock = SPIN_LOCK_UNLOCKED,
@@ -185,6 +187,37 @@ void aplic_hw_write_reg(unsigned int offset, uint32_t value)
     spin_unlock_irqrestore(&aplic.lock, flags);
 }
 
+/*
+ * As needed, synchronize with all IOMMUs and APLICs to ensure that no
+ * straggler MSIs will arrive at the old interrupt file after this step.
+ */
+void aplic_genmsi_barrier(void)
+{
+    const struct imsic_config *imsic = imsic_get_config();
+    unsigned int cpu = smp_processor_id();
+    unsigned long flags;
+    uint32_t val;
+
+    /*
+     * imsic_sync_id() is nr_ids, which imsic_parse_node() limits to
+     * IMSIC_MAX_ID, so it always fits into the EIID field.
+     */
+    BUILD_BUG_ON(IMSIC_MAX_ID > MASK_EXTR(~0U, APLIC_TARGET_EIID));
+    ASSERT(imsic_sync_id(imsic) <= IMSIC_MAX_ID);
+
+    val = MASK_INSR(aplic_hart_index(cpu), APLIC_TARGET_HART_IDX) |
+          imsic_sync_id(imsic);
+
+    spin_lock_irqsave(&aplic.lock, flags);
+
+    writel(val, &aplic.regs->genmsi);
+
+    while ( readl(&aplic.regs->genmsi) & APLIC_GENMSI_BUSY )
+        cpu_relax();
+
+    spin_unlock_irqrestore(&aplic.lock, flags);
+}
+
 static void __init aplic_init_hw_interrupts(void)
 {
     unsigned int i;
@@ -215,6 +248,7 @@ static int __init cf_check aplic_init(void)
     uint64_t size, paddr;
     const struct dt_device_node *imsic_node;
     const struct dt_device_node *node = aplic_info.node;
+    const struct imsic_config *imsic;
     int rc;
 
     /* Check for associated imsic node */
@@ -238,6 +272,23 @@ static int __init cf_check aplic_init(void)
                                &aplic_info.num_irqs) )
         panic("%s: failed to get number of interrupt sources\n",
               node->full_name);
+
+    /*
+     * Xen drives the APLIC in MSI delivery mode only, mapping each source 1:1
+     * to an interrupt identity of its own IMSIC interrupt file: source i is
+     * given EIID i (see aplic_set_irq_affinity()). Hence only the sources
+     * numbered up to imsic_nr_free_ids() can be used: the identities above
+     * are either reserved or not implemented.
+     */
+    imsic = imsic_get_config();
+    if ( aplic_info.num_irqs > imsic_nr_free_ids(imsic) )
+    {
+        printk(XENLOG_WARNING
+               "%s: only %u of %u interrupt sources usable with %u IMSIC identities\n",
+               node->full_name, imsic_nr_free_ids(imsic), aplic_info.num_irqs,
+               imsic->nr_ids);
+        aplic_info.num_irqs = imsic_nr_free_ids(imsic);
+    }
 
     guest_aplic_num_sources = min(GUEST_APLIC_MAX_SOURCES, aplic_info.num_irqs);
 

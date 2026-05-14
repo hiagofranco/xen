@@ -89,6 +89,7 @@
 #define APLIC_SETIPNUM_BE               0x2004
 
 #define APLIC_GENMSI                    0x3000
+#define APLIC_GENMSI_BUSY               BIT(12, U)
 
 #define APLIC_TARGET_BASE               0x3004
 #define APLIC_TARGET_LAST               0x3ffc
@@ -172,5 +173,7 @@ struct aplic_regs {
 
 uint32_t aplic_hw_read_reg(unsigned int offset);
 void aplic_hw_write_reg(unsigned int offset, uint32_t value);
+
+void aplic_genmsi_barrier(void);
 
 #endif /* RISCV_APLIC_H */

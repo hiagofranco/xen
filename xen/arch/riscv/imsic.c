@@ -27,6 +27,7 @@
 #include <xen/xvmalloc.h>
 
 #include <asm/aia.h>
+#include <asm/aplic.h>
 #include <asm/imsic.h>
 #include <asm/p2m.h>
 #include <asm/vaplic.h>
@@ -61,6 +62,12 @@ static unsigned int __ro_after_init guest_num_msis;
 #define IMSIC_ENABLE_EIDELIVERY     1
 #define IMSIC_DISABLE_EITHRESHOLD   1
 #define IMSIC_ENABLE_EITHRESHOLD    0
+
+#define imsic_csr_read(c)       \
+({                              \
+    csr_write(CSR_SISELECT, c); \
+    csr_read(CSR_SIREG);        \
+})
 
 #define imsic_csr_write(c, v)   \
 do {                            \
@@ -178,6 +185,8 @@ void imsic_irq_enable(unsigned int irq)
      * spin_lock_irqsave() should be used instead of spin_lock().
      */
     ASSERT(!local_irq_is_enabled());
+    /* aplic_init() keeps the APLIC sources off the reserved identities. */
+    ASSERT(irq && irq <= imsic_nr_free_ids(&imsic_cfg));
 
     spin_lock(&imsic_cfg.lock);
     /*
@@ -215,6 +224,15 @@ void imsic_irq_disable(unsigned int irq)
     spin_lock(&imsic_cfg.lock);
     imsic_local_eix_update(irq, 1, false, false);
     spin_unlock(&imsic_cfg.lock);
+}
+
+static bool imsic_local_is_pending(unsigned int id)
+{
+    unsigned int isel =
+        (id / BITS_PER_LONG) * (BITS_PER_LONG / IMSIC_EIPx_BITS) + IMSIC_EIP0;
+    unsigned long bit = BIT(id % BITS_PER_LONG, UL);
+
+    return imsic_csr_read(isel) & bit;
 }
 
 /* Callers aren't intended to changed imsic_cfg so return const. */
@@ -585,6 +603,35 @@ static void imsic_vsfile_deselect(const struct imsic_vsfile_ctx *ctx)
 {
     csr_write(CSR_HSTATUS, ctx->hstatus);
     csr_write(CSR_VSISELECT, ctx->vsiselect);
+}
+
+/*
+ * Ensure that all the MSIs the APLIC has already generated for the hart this
+ * runs on have really reached the hart's IMSIC.
+ *
+ * The barrier is the one described by the AIA specification in
+ * "Synchronizing interactions between a hart and the APLIC": ask the APLIC to
+ * send an MSI to the hart itself and wait until it shows up as pending in the
+ * hart's own interrupt file. As it says nothing about MSIs on their way to
+ * any other hart, it has to be executed by the pCPU owning the interrupt file
+ * the MSIs were being sent to.
+ */
+static void __maybe_unused imsic_aplic_sync(void *unused)
+{
+    imsic_local_eix_update(imsic_sync_id(&imsic_cfg), 1, true, false);
+
+    /*
+     * For FENCE, a CSR write counts as device output, which neither
+     * spin_lock() nor writel() in aplic_genmsi_barrier() orders before the
+     * write to genmsi: should the IMSIC see the clear after the extempore
+     * MSI, the loop below would never end.
+     */
+    RISCV_FENCE(o, o);
+
+    aplic_genmsi_barrier();
+
+    while ( !imsic_local_is_pending(imsic_sync_id(&imsic_cfg)) )
+        cpu_relax();
 }
 
 static void imsic_vsfile_local_clear(const struct imsic_vsfile_data *idata)
