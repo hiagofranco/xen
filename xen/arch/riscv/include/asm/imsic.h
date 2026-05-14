@@ -133,4 +133,6 @@ int imsic_map_guest_file(struct vcpu *v, unsigned int vsfile_id);
 
 void imsic_vsfile_attach(struct vcpu *v);
 
+void imsic_migrate_vcpu(struct vcpu *v);
+
 #endif /* RISCV_IMSIC_H */

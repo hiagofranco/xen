@@ -1070,3 +1070,40 @@ void imsic_vsfile_attach(struct vcpu *v)
      */
     imsic_vsfile_set_vgein(v, hgei);
 }
+
+/*
+ * Whether the h/w guest interrupt file of @v, the vCPU running on this pCPU,
+ * belongs to another pCPU, i.e. has to be moved here by imsic_migrate_vcpu().
+ * A vCPU without a h/w file has none to move.
+ *
+ * No lock is needed: vsfile_cpu of a running vCPU is changed only by the vCPU
+ * itself, when it acquires a file in imsic_vsfile_attach().
+ *
+ * TODO: a s/w file, once supported, has to be moved too.
+ */
+static bool imsic_vsfile_needs_move(const struct vcpu *v)
+{
+    unsigned int cpu = ACCESS_ONCE(v->arch.vimsic_state->vsfile_cpu);
+
+    ASSERT(v == current);
+
+    return cpu != CPU_NONE && cpu != smp_processor_id();
+}
+
+/*
+ * Make the h/w guest interrupt file of @v belong to the pCPU @v runs on.
+ *
+ * Has to be called by @v itself (see the ASSERT() below), right before it
+ * enters the guest: as long as @v runs on this pCPU, it can neither run on
+ * nor be moved to another one, so its file can't be in use elsewhere while
+ * it is moved.
+ */
+void imsic_migrate_vcpu(struct vcpu *v)
+{
+    ASSERT(v == current);
+
+    if ( !imsic_vsfile_needs_move(v) )
+        return;
+
+    BUG_ON("unimplemented");
+}
