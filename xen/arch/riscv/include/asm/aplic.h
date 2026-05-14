@@ -151,4 +151,8 @@ void aplic_hw_write_reg(unsigned int offset, uint32_t value);
 
 bool has_msi_support(void);
 
+void aplic_reconfigure_target(const struct vcpu *v,
+                              unsigned int old_guest_file_id,
+                              unsigned long old_pcpu);
+
 #endif /* ASM_RISCV_APLIC_H */

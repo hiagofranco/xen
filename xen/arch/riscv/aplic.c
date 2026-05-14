@@ -68,6 +68,48 @@ uint32_t aplic_msi_target_gen(const struct vcpu *target_vcpu, uint32_t base_val)
     return base_val;
 }
 
+void aplic_reconfigure_target(const struct vcpu *v,
+                              unsigned int old_guest_file_id,
+                              unsigned long old_pcpu)
+{
+    const struct vintc *vintc = v->domain->arch.vintc;
+    unsigned long *auth_irq_bmp = vintc->used_irqs;
+    unsigned long old_hart_field = aplic_hart_field(old_pcpu);
+    unsigned long flags;
+    unsigned int irqn;
+
+    /* Support only MSI mode at the moment */
+    BUG_ON(!has_msi_support());
+
+    spin_lock_irqsave(&aplic.lock, flags);
+
+    bitmap_for_each ( irqn, auth_irq_bmp, vintc->nr_virqs )
+    {
+        volatile uint32_t __iomem *ptarget;
+        uint32_t target_val;
+        unsigned int guest_index, hart_index;
+
+        if ( !irqn )
+            continue;
+
+        ptarget = &aplic.regs->target[irqn - 1];
+        target_val = readl(ptarget);
+
+        guest_index = MASK_EXTR(target_val, APLIC_TARGET_GUEST_IDX_MASK);
+        hart_index = MASK_EXTR(target_val, APLIC_TARGET_HART_IDX_MASK);
+
+        if ( (guest_index != old_guest_file_id) ||
+             (hart_index != old_hart_field) )
+            continue;
+
+        target_val = aplic_msi_target_gen(v, target_val);
+
+        writel(target_val, ptarget);
+    }
+
+    spin_unlock_irqrestore(&aplic.lock, flags);
+}
+
 uint32_t aplic_hw_read_reg(unsigned int offset, uint32_t mask)
 {
     unsigned long flags;
