@@ -27,6 +27,7 @@
 #include <xen/xvmalloc.h>
 
 #include <asm/aia.h>
+#include <asm/aplic.h>
 #include <asm/imsic.h>
 #include <asm/p2m.h>
 
@@ -60,6 +61,14 @@ static unsigned int __ro_after_init guest_num_msis;
 #define IMSIC_ENABLE_EIDELIVERY     1
 #define IMSIC_DISABLE_EITHRESHOLD   1
 #define IMSIC_ENABLE_EITHRESHOLD    0
+
+#define imsic_csr_read(c)           \
+({                                  \
+    unsigned long r;                \
+    csr_write(CSR_SISELECT, (c));   \
+    r = csr_read(CSR_SIREG);        \
+    r;                              \
+})
 
 #define imsic_csr_write(c, v)   \
 do {                            \
@@ -272,6 +281,15 @@ void imsic_irq_disable(unsigned int irq)
     spin_lock(&imsic_cfg.lock);
     imsic_local_eix_update(irq, 1, false, false);
     spin_unlock(&imsic_cfg.lock);
+}
+
+static bool imsic_local_is_pending(unsigned int id)
+{
+    unsigned long isel =
+        (id / __riscv_xlen) * (__riscv_xlen / IMSIC_EIPx_BITS) + IMSIC_EIP0;
+    unsigned long bit = BIT(id & (__riscv_xlen - 1), UL);
+
+    return !!(imsic_csr_read(isel) & bit);
 }
 
 /* Callers aren't intended to changed imsic_cfg so return const. */
@@ -910,9 +928,11 @@ void imsic_migrate_vcpu(struct vcpu *v)
     struct vimsic_state *imsic_state = v->arch.vimsic_state;
     unsigned long flags;
     unsigned int old_vsfile_id;
+    unsigned long old_vsfile_pcpu;
 
     read_lock_irqsave(&imsic_state->vsfile_lock, flags);
     old_vsfile_id = imsic_state->guest_file_id;
+    old_vsfile_pcpu = imsic_state->vsfile_pcpu;
     read_unlock_irqrestore(&imsic_state->vsfile_lock, flags);
 
     /*
@@ -931,6 +951,7 @@ void imsic_migrate_vcpu(struct vcpu *v)
 
     /*
      * At this point, all interrupt producers are still using the old IMSIC
+     * VS-file so we first move all interrupt producers to the new IMSIC
      * VS-file.
      */
 
@@ -938,6 +959,38 @@ void imsic_migrate_vcpu(struct vcpu *v)
 
     /* Zero-out new IMSIC VS-file */
     imsic_vsfile_local_clear(new_vsfile_hgei, nr_hw_eix);
+
+    /* Update G-stage mapping for the new IMSIC VS-file  */
+    if ( imsic_map_guest_file(v, new_vsfile_hgei) )
+        domain_crash(v->domain, "Migration to hw interrupt file failed\n");
+
+    imsic_update_state(v, new_vsfile_hgei);
+
+    /*
+     * TODO: Modify the relevant translation tables at all IOMMUs so that MSIs
+     *       for this virtual interrupt file are now sent to the new physical
+     *       interrupt file.
+     */
+    BUG_ON(iommu_enabled);
+
+    /*
+     * If any interrupts at an APLIC are forwarded by MSIs to the old interrupt
+     * file, reconfigure the APLIC to send them to the new interrupt file.
+     */
+    aplic_reconfigure_target(v, old_vsfile_id, old_vsfile_pcpu);
+
+    /* Synchronizing interactions between a hart and the APLIC */
+    imsic_local_eix_update(imsic_cfg.sync_id, 1, true, false);
+
+    aplic_genmsi_barrier();
+
+    while ( !imsic_local_is_pending(imsic_cfg.sync_id) )
+        cpu_relax();
+
+    /*
+     * At this point, all interrupt producers have been moved
+     * to the new IMSIC VS-file.
+     */
 
     BUG_ON("unimplemented");
 }
