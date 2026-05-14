@@ -115,6 +115,12 @@ do {                            \
     r;                              \
 })
 
+#define imsic_vs_csr_set(c, v) \
+do { \
+    csr_write(CSR_VSISELECT, c); \
+    csr_set(CSR_VSIREG, v); \
+} while ( 0 )
+
 #define imsic_vs_csr_write(c, v)    \
 do {                                \
     csr_write(CSR_VSISELECT, c);    \
@@ -183,6 +189,19 @@ static void imsic_eix_write(int ireg, unsigned long val)
                          imsic_vs_csr_write, val)
     imsic_switchcase_64(imsic_switchcase_break, IMSIC_EIE0,
                          imsic_vs_csr_write, val)
+    default:
+        ASSERT_UNREACHABLE();
+    }
+}
+
+static void imsic_eix_set(int ireg, unsigned long val)
+{
+    switch ( ireg )
+    {
+    imsic_switchcase_64(imsic_switchcase_break, IMSIC_EIP0,
+                        imsic_vs_csr_set, val)
+    imsic_switchcase_64(imsic_switchcase_break, IMSIC_EIE0,
+                        imsic_vs_csr_set, val)
     default:
         ASSERT_UNREACHABLE();
     }
@@ -1017,6 +1036,48 @@ static void imsic_vsfile_read(int vsfile_hgei, int vsfile_cpu,
                      imsic_vsfile_local_read, &idata, 1);
 }
 
+static void imsic_vsfile_local_update(unsigned int vsfile_hgei,
+                                      unsigned int nr_eix,
+                                      struct imsic_mrif *mrif)
+{
+    unsigned int i;
+    struct imsic_mrif_eix *eix;
+    unsigned long new_hstatus, old_hstatus, old_vsiselect;
+
+    /* We can only update if we have a HW IMSIC context */
+    if ( vsfile_hgei == 0 )
+        return;
+
+    /*
+     * We don't use imsic_mrif_atomic_xyz() functions to read values
+     * from MRIF in this function because it is always called with
+     * pointer to temporary MRIF on stack.
+     */
+
+    old_vsiselect = csr_read(CSR_VSISELECT);
+    old_hstatus = csr_read(CSR_HSTATUS);
+    new_hstatus = old_hstatus & ~HSTATUS_VGEIN;
+    new_hstatus |= ((unsigned long)vsfile_hgei) << HSTATUS_VGEIN_SHIFT;
+    csr_write(CSR_HSTATUS, new_hstatus);
+
+    for ( i = 0; i < nr_eix; i++ )
+    {
+        eix = &mrif->eix[i];
+
+        imsic_eix_set(IMSIC_EIP0 + i * 2, eix->eip[0]);
+        imsic_eix_set(IMSIC_EIE0 + i * 2, eix->eie[0]);
+#ifdef CONFIG_RISCV_32
+        imsic_eix_set(IMSIC_EIP0 + i * 2 + 1, eix->eip[1]);
+        imsic_eix_set(IMSIC_EIE0 + i * 2 + 1, eix->eie[1]);
+#endif
+    }
+    imsic_vs_csr_write(IMSIC_EITHRESHOLD, mrif->eithreshold);
+    imsic_vs_csr_write(IMSIC_EIDELIVERY, mrif->eidelivery);
+
+    csr_write(CSR_HSTATUS, old_hstatus);
+    csr_write(CSR_VSISELECT, old_vsiselect);
+}
+
 void imsic_migrate_vcpu(struct vcpu *v)
 {
     unsigned int new_vsfile_hgei;
@@ -1087,7 +1148,8 @@ void imsic_migrate_vcpu(struct vcpu *v)
 
     /*
      * At this point, all interrupt producers have been moved
-     * to the new IMSIC VS-file.
+     * to the new IMSIC VS-file so we move register state from
+     * the old IMSIC VS/SW-file to the new IMSIC VS-file.
      */
 
     memset(&tmrif, 0, sizeof(tmrif));
@@ -1104,5 +1166,11 @@ void imsic_migrate_vcpu(struct vcpu *v)
     else
         panic("IMSIC SW-file isn't supported\n");
 
-    BUG_ON("unimplemented");
+    /* Restore register state in the new IMSIC VS-file */
+    imsic_vsfile_local_update(new_vsfile_hgei, nr_hw_eix, &tmrif);
+
+    /* Set VCPU HSTATUS.VGEIN to new IMSIC VS-file */
+    vcpu_guest_cpu_user_regs(v)->hstatus &= ~HSTATUS_VGEIN;
+    vcpu_guest_cpu_user_regs(v)->hstatus |=
+            MASK_INSR(new_vsfile_hgei, HSTATUS_VGEIN);
 }
