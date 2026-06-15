@@ -101,6 +101,8 @@ struct arch_domain {
     const unsigned long *isa;
 
     struct vintc *vintc;
+
+    struct vmmio *vmmio;
 };
 
 #include <xen/sched.h>
