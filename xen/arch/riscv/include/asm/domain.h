@@ -9,6 +9,7 @@
 
 #include <asm/cpufeature.h>
 #include <asm/guest-layout.h>
+#include <asm/mmio.h>
 #include <asm/p2m.h>
 #include <asm/vtimer.h>
 
@@ -101,6 +102,8 @@ struct arch_domain {
     const unsigned long *isa;
 
     struct vintc *vintc;
+
+    struct vmmio vmmio;
 };
 
 #include <xen/sched.h>

@@ -12,6 +12,7 @@
 #include <asm/cpufeature.h>
 #include <asm/csr.h>
 #include <asm/intc.h>
+#include <asm/mmio.h>
 #include <asm/riscv_encoding.h>
 #include <asm/vtimer.h>
 
@@ -306,6 +307,9 @@ int arch_domain_create(struct domain *d,
     init_guest_isa(d);
 
     if ( (rc = p2m_init(d, config)) != 0)
+        goto fail;
+
+    if ( (rc = domain_io_init(d, MAX_IO_HANDLER)) != 0 )
         goto fail;
 
     if ( (rc = domain_vintc_init(d)) )
