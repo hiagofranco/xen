@@ -400,9 +400,27 @@ static const struct mmio_handler_ops vaplic_mmio_ops = {
     .write = vaplic_mmio_write,
 };
 
+void vaplic_state_save(struct vcpu *v)
+{
+    if ( has_msi_support() )
+        imsic_state_save(v);
+    else
+        BUG_ON("unimplemented");
+}
+
+void vaplic_state_restore(struct vcpu *v)
+{
+    if ( has_msi_support() )
+        imsic_state_restore(v);
+    else
+        BUG_ON("unimplemented");
+}
+
 static const struct vintc_ops vintc_ops = {
     .vcpu_init = vaplic_init,
     .vcpu_deinit = vaplic_deinit,
+    .store_state = vaplic_state_save,
+    .restore_state = vaplic_state_restore,
 };
 
 int domain_vaplic_init(struct domain *d)

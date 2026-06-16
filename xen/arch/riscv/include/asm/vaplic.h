@@ -34,4 +34,7 @@ struct vaplic {
 int domain_vaplic_init(struct domain *d);
 void domain_vaplic_deinit(struct domain *d);
 
+void vaplic_state_save(struct vcpu *v);
+void vaplic_state_restore(struct vcpu *v);
+
 #endif /* ASM__RISCV__VAPLIC_H */
