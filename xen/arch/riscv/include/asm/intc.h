@@ -64,6 +64,12 @@ struct vintc_ops {
 
     /* Deinitialize some vINTC-related stuff for a vCPU */
     void (*vcpu_deinit)(struct vcpu *v);
+
+    /* Store virtual interrupt controller state */
+    void (*store_state)(struct vcpu *v);
+
+    /* Restore virtual interrupt controller state */
+    void (*restore_state)(struct vcpu *v);
 };
 
 struct vintc {
@@ -90,5 +96,8 @@ int domain_vintc_init(struct domain *d);
 void domain_vintc_deinit(struct domain *d);
 
 bool vintc_reserve_virq(const struct domain *d, unsigned int virq);
+
+void vintc_state_save(struct vcpu *vcpu);
+void vintc_state_restore(struct vcpu *vcpu);
 
 #endif /* ASM__RISCV__INTERRUPT_CONTOLLER_H */

@@ -163,3 +163,17 @@ bool vintc_reserve_virq(const struct domain *d, unsigned int virq)
 
     return !test_and_set_bit(virq, d->arch.vintc->used_irqs);
 }
+
+void vintc_state_save(struct vcpu *vcpu)
+{
+    const struct vintc_ops *ops = vcpu->domain->arch.vintc->ops;
+
+    ops->store_state(vcpu);
+}
+
+void vintc_state_restore(struct vcpu *vcpu)
+{
+    const struct vintc_ops *ops = vcpu->domain->arch.vintc->ops;
+
+    ops->restore_state(vcpu);
+}
