@@ -190,3 +190,17 @@ int __overlay_init vintc_reserve_virq(const struct domain *d,
 
     return test_and_set_bit(virq, d->arch.vintc->used_irqs) ? -EEXIST : 0;
 }
+
+void vintc_ctxt_switch_from(struct vcpu *p)
+{
+    const struct vintc_ops *ops = p->domain->arch.vintc->ops;
+
+    ops->ctxt_switch_from(p);
+}
+
+void vintc_ctxt_switch_to(struct vcpu *n)
+{
+    const struct vintc_ops *ops = n->domain->arch.vintc->ops;
+
+    ops->ctxt_switch_to(n);
+}

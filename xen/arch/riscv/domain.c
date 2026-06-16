@@ -412,6 +412,8 @@ static void ctxt_switch_from(struct vcpu *p)
 
     vtimer_ctxt_switch_from(p);
 
+    vintc_ctxt_switch_from(p);
+
     csrs_ctxt_switch_from(p);
 }
 
@@ -426,6 +428,8 @@ static void ctxt_switch_to(struct vcpu *n)
         return;
 
     csrs_ctxt_switch_to(n);
+
+    vintc_ctxt_switch_to(n);
 
     vtimer_ctxt_switch_to(n);
 

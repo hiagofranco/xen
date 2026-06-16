@@ -64,6 +64,12 @@ struct vintc_ops {
 
     /* Deinitialize some vINTC-related stuff for a vCPU */
     void (*vcpu_deinit)(struct vcpu *v);
+
+    /* Save vINTC state of the vCPU being switched out */
+    void (*ctxt_switch_from)(struct vcpu *p);
+
+    /* Restore vINTC state of the vCPU being switched in */
+    void (*ctxt_switch_to)(struct vcpu *n);
 };
 
 struct vintc {
@@ -93,5 +99,8 @@ int domain_vintc_init(struct domain *d);
 void domain_vintc_deinit(struct domain *d);
 
 int vintc_reserve_virq(const struct domain *d, unsigned int virq);
+
+void vintc_ctxt_switch_from(struct vcpu *p);
+void vintc_ctxt_switch_to(struct vcpu *n);
 
 #endif /* RISCV_INTC_H */
