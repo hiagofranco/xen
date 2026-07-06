@@ -104,6 +104,8 @@ int vcpu_imsic_init(struct vcpu *v);
 void vcpu_imsic_deinit(struct vcpu *v);
 unsigned int vcpu_guest_file_id(const struct vcpu *v);
 
+void imsic_update_state(struct vcpu *v, unsigned int guest_file_id);
+
 int vimsic_make_domu_dt_node(struct kernel_info *kinfo, unsigned int *phandle);
 
 int imsic_map_guest_file(struct vcpu *v, unsigned int vsfile_id);

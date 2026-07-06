@@ -15,4 +15,6 @@ void aia_init(void);
 unsigned int vgein_assign(struct vcpu *v);
 void vgein_release(struct vcpu *v, unsigned int vgein_id);
 
+void vcpu_aia_init(struct vcpu *v);
+
 #endif /* RISCV_AIA_H */

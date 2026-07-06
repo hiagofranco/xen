@@ -13,6 +13,7 @@
 #include <asm/cpufeature.h>
 #include <asm/csr.h>
 #include <asm/current.h>
+#include <asm/imsic.h>
 
 struct vgein_ctrl {
     unsigned long bmp;
@@ -32,6 +33,35 @@ static bool __ro_after_init _aia_usable;
 bool aia_usable(void)
 {
     return _aia_usable;
+}
+
+void vcpu_aia_init(struct vcpu *v)
+{
+    unsigned int new_vsfile_id;
+    int rc;
+
+    if ( !aia_usable() )
+        return;
+
+    new_vsfile_id = vgein_assign(v);
+
+    /*
+     * vgein_assign() returns 0 when no free h/w guest interrupt file is
+     * available (including GEILEN == 0); imsic_map_guest_file() maps nothing
+     * in that case.
+     */
+    rc = imsic_map_guest_file(v, new_vsfile_id);
+    if ( rc )
+    {
+        /* Can't continue w/o correctly mapped IMSIC interrupt file */
+        domain_crash(v->domain);
+        return;
+    }
+
+    vcpu_guest_cpu_user_regs(v)->hstatus |=
+        MASK_INSR(new_vsfile_id, HSTATUS_VGEIN);
+
+    imsic_update_state(v, new_vsfile_id);
 }
 
 static int vgein_init(unsigned int cpu)

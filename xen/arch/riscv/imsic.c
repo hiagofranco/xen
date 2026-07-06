@@ -83,6 +83,19 @@ unsigned int vcpu_guest_file_id(const struct vcpu *v)
     return ACCESS_ONCE(v->arch.vimsic_state->guest_file_id);
 }
 
+void imsic_update_state(struct vcpu *v, unsigned int guest_file_id)
+{
+    unsigned long flags;
+    struct vimsic_state *vimsic_state = v->arch.vimsic_state;
+    unsigned long pcpu = ( !guest_file_id ) ?
+                         NR_CPUS : cpuid_to_hartid(v->processor);
+
+    write_lock_irqsave(&vimsic_state->vsfile_lock, flags);
+    vimsic_state->guest_file_id = guest_file_id;
+    vimsic_state->vsfile_pcpu = pcpu;
+    write_unlock_irqrestore(&vimsic_state->vsfile_lock, flags);
+}
+
 void __init imsic_ids_local_delivery(bool enable)
 {
     if ( enable )
