@@ -13,6 +13,7 @@
 #include <asm/csr.h>
 #include <asm/current.h>
 #include <asm/gpr-num.h>
+#include <asm/imsic.h>
 #include <asm/intc.h>
 #include <asm/mmio.h>
 #include <asm/riscv_encoding.h>
@@ -264,6 +265,8 @@ static void continue_new_vcpu(struct vcpu *prev)
         reset_stack_and_jump(idle_loop);
 
     vcpu_set_vsxl(current);
+
+    imsic_vsfile_attach(current);
 
     /*
      * return_to_new_vcpu() sets up hstatus.SPV, sstatus.SPP and sepc so

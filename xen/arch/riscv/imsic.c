@@ -25,8 +25,10 @@
 #include <xen/spinlock.h>
 #include <xen/xvmalloc.h>
 
+#include <asm/aia.h>
 #include <asm/imsic.h>
 #include <asm/p2m.h>
+#include <asm/vaplic.h>
 
 #define IMSIC_HART_SIZE(guest_bits) (BIT(guest_bits, U) * IMSIC_MMIO_PAGE_SZ)
 
@@ -77,9 +79,49 @@ do {                            \
     csr_clear(CSR_SIREG, v);    \
 } while (0)
 
+#define imsic_vs_csr_write(c, v)    \
+do {                                \
+    csr_write(CSR_VSISELECT, c);    \
+    csr_write(CSR_VSIREG, v);       \
+} while (0)
+
+/*
+ * On RV64 a 64-bit EIx group is the even-numbered register alone, whereas on
+ * RV32 it is split into the even-numbered (low half) and the following
+ * odd-numbered (high half) register. ireg names the first, even-numbered
+ * register of such a group, among eip0..eip63 or eie0..eie63.
+ */
+static void imsic_eix_check(unsigned int ireg)
+{
+    ASSERT(!(ireg & 1));
+    ASSERT((ireg >= IMSIC_EIP0 && ireg < IMSIC_EIP0 + 64) ||
+           (ireg >= IMSIC_EIE0 && ireg < IMSIC_EIE0 + 64));
+}
+
+/* Write a whole 64-bit EIx group (see imsic_eix_check()). */
+static void imsic_eix_write64(unsigned int ireg, uint64_t val)
+{
+    imsic_eix_check(ireg);
+    imsic_vs_csr_write(ireg, val);
+    if ( IS_ENABLED(CONFIG_RISCV_32) )
+        imsic_vs_csr_write(ireg + 1, val >> 32);
+}
+
 unsigned int vcpu_guest_file_id(const struct vcpu *v)
 {
     return ACCESS_ONCE(v->arch.vimsic_state->guest_file_id);
+}
+
+static void imsic_update_state(struct vcpu *v, unsigned int guest_file_id)
+{
+    unsigned long flags;
+    struct vimsic_state *vimsic_state = v->arch.vimsic_state;
+    unsigned int cpu = guest_file_id ? v->processor : CPU_NONE;
+
+    write_lock_irqsave(&vimsic_state->vsfile_lock, flags);
+    vimsic_state->guest_file_id = guest_file_id;
+    vimsic_state->vsfile_cpu = cpu;
+    write_unlock_irqrestore(&vimsic_state->vsfile_lock, flags);
 }
 
 void __init imsic_ids_local_delivery(bool enable)
@@ -318,6 +360,8 @@ static int __init imsic_parse_node(const struct dt_device_node *node,
         return -ENOENT;
     }
 
+    imsic_cfg.nr_eix = DIV_ROUND_UP(imsic_cfg.nr_ids + 1, 64);
+
     /* Compute base address */
     *nr_mmios = 0;
     rc = dt_device_get_address(node, *nr_mmios, &base_addr, NULL);
@@ -433,6 +477,77 @@ int cf_check vcpu_imsic_init(struct vcpu *v)
     v->arch.vimsic_state = imsic_state;
 
     return 0;
+}
+
+/*
+ * Arguments of the imsic_vsfile_local_*() helpers, which work on a guest
+ * interrupt file of the pCPU they run on.
+ */
+struct imsic_vsfile_data {
+    /* Guest interrupt file to work on, i.e. the hstatus.VGEIN selecting it. */
+    unsigned int hgei;
+    /* Number of 64-bit EIx groups to cover, see imsic_cfg.nr_eix. */
+    unsigned int nr_eix;
+};
+
+/* The state of this hart imsic_vsfile_select() changes. */
+struct imsic_vsfile_ctx {
+    unsigned long hstatus;
+    unsigned long vsiselect;
+};
+
+/*
+ * vsiselect/vsireg only reach the guest interrupt file selected by
+ * hstatus.VGEIN, so point VGEIN at file @hgei of this hart for the accesses
+ * which follow. hstatus and vsiselect hold the state of the vCPU running on
+ * this pCPU: save them into @ctx, for imsic_vsfile_deselect() to restore.
+ */
+static void imsic_vsfile_select(unsigned int hgei,
+                                struct imsic_vsfile_ctx *ctx)
+{
+    unsigned long hstatus;
+
+    ctx->vsiselect = csr_read(CSR_VSISELECT);
+    ctx->hstatus = csr_read(CSR_HSTATUS);
+
+    hstatus = ctx->hstatus & ~HSTATUS_VGEIN;
+    hstatus |= MASK_INSR(hgei, HSTATUS_VGEIN);
+    csr_write(CSR_HSTATUS, hstatus);
+}
+
+static void imsic_vsfile_deselect(const struct imsic_vsfile_ctx *ctx)
+{
+    csr_write(CSR_HSTATUS, ctx->hstatus);
+    csr_write(CSR_VSISELECT, ctx->vsiselect);
+}
+
+static void imsic_vsfile_local_clear(const struct imsic_vsfile_data *idata)
+{
+    unsigned int i;
+    struct imsic_vsfile_ctx ctx;
+    unsigned long flags;
+
+    /* We can only zero-out if we have a IMSIC VS-file */
+    if ( !idata->hgei )
+        return;
+
+    /* Nothing on this pCPU is to run with the file selected meanwhile. */
+    local_irq_save(flags);
+
+    imsic_vsfile_select(idata->hgei, &ctx);
+
+    imsic_vs_csr_write(IMSIC_EIDELIVERY, 0);
+    imsic_vs_csr_write(IMSIC_EITHRESHOLD, 0);
+
+    for ( i = 0; i < idata->nr_eix; i++ )
+    {
+        imsic_eix_write64(IMSIC_EIP0 + i * 2, 0);
+        imsic_eix_write64(IMSIC_EIE0 + i * 2, 0);
+    }
+
+    imsic_vsfile_deselect(&ctx);
+
+    local_irq_restore(flags);
 }
 
 void cf_check vcpu_imsic_deinit(struct vcpu *v)
@@ -735,4 +850,110 @@ int __init vimsic_make_domu_dt_node(struct kernel_info *kinfo,
         *phandle = vimsic_phandle;
 
     return fdt_end_node(fdt);
+}
+
+/*
+ * Take a h/w guest interrupt file on the pCPU @v runs on and make it the
+ * vCPU's one.
+ *
+ * hstatus.VGEIN is deliberately left alone: it must only point at a file
+ * which already holds the vCPU's interrupt state, and the file taken here is
+ * zeroed, which is all the state only a vCPU which hasn't run yet has. Hence
+ * it is up to the caller to set hstatus.VGEIN at the right moment, see
+ * imsic_vsfile_set_vgein().
+ *
+ * Returns the id of the file, or 0, with the domain crashed, if none could be
+ * taken.
+ */
+static unsigned int imsic_vsfile_acquire(struct vcpu *v)
+{
+    unsigned int cpu = v->processor;
+    struct imsic_vsfile_data vsfile_data = { .nr_eix = imsic_cfg.nr_eix };
+    unsigned int vsfile_id;
+    int rc;
+
+    /* @v gets a file of the pCPU it runs on, which clears it below. */
+    ASSERT(cpu == smp_processor_id());
+
+    vsfile_id = vgein_assign(v);
+    if ( !vsfile_id )
+    {
+        /*
+         * vgein_assign() returns 0 when no free h/w guest interrupt file is
+         * available. s/w guest interrupt files aren't supported yet, so such
+         * a vCPU can't be run.
+         */
+        domain_crash(v->domain,
+                     "%pv: no free h/w guest interrupt file on CPU%u\n",
+                     v, cpu);
+        return 0;
+    }
+
+    vsfile_data.hgei = vsfile_id;
+
+    /* The file could still hold the state of its previous owner */
+    imsic_vsfile_local_clear(&vsfile_data);
+
+    rc = imsic_map_guest_file(v, vsfile_id);
+    if ( rc )
+    {
+        vgein_release(v, vsfile_id, cpu);
+
+        /* Can't continue w/o correctly mapped IMSIC interrupt file */
+        domain_crash(v->domain,
+                     "%pv: failed to map h/w guest interrupt file %u: %d\n",
+                     v, vsfile_id, rc);
+        return 0;
+    }
+
+    /*
+     * TODO: Modify the relevant translation tables at all IOMMUs so that MSIs
+     *       for this virtual interrupt file are sent to this physical one.
+     */
+    if ( iommu_enabled )
+        printk_once("IMSIC: IOMMU MSI retargeting is not implemented\n");
+
+    imsic_update_state(v, vsfile_id);
+
+    return vsfile_id;
+}
+
+/* Make guest interrupt file @hgei the source of @v's VS-level interrupts. */
+static void imsic_vsfile_set_vgein(struct vcpu *v, unsigned int hgei)
+{
+    struct cpu_user_regs *regs = vcpu_guest_cpu_user_regs(v);
+
+    regs->hstatus &= ~HSTATUS_VGEIN;
+    regs->hstatus |= MASK_INSR(hgei, HSTATUS_VGEIN);
+}
+
+/*
+ * Give a vCPU which is about to run for the first time its first h/w guest
+ * interrupt file, on the pCPU it runs on.
+ */
+void imsic_vsfile_attach(struct vcpu *v)
+{
+    unsigned int hgei;
+
+    if ( !aia_usable() )
+        return;
+
+    ASSERT(v->arch.vimsic_state->vsfile_cpu == CPU_NONE);
+
+    /* Zero-out, map and start to use the IMSIC VS-file */
+    hgei = imsic_vsfile_acquire(v);
+    if ( !hgei )
+        return;
+
+    /*
+     * A target the guest has programmed for the vCPU so far reached only the
+     * stored copy, as there was no file to point the h/w register at.
+     */
+    vaplic_reconfigure_target(v);
+
+    /*
+     * The vCPU has never run yet, so the just zeroed out file is all the
+     * interrupt state it has and hstatus.VGEIN can be pointed at it at once.
+     */
+    imsic_vsfile_set_vgein(v, hgei);
 }

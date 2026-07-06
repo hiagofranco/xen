@@ -55,6 +55,13 @@ struct imsic_config {
     /* Number off interrupt identities */
     unsigned int nr_ids;
 
+    /*
+     * Number of 64-bit EIx groups needed to cover all the interrupt
+     * identities, which are 0 (never valid, but it still occupies a bit) up
+     * to and including nr_ids.
+     */
+    unsigned int nr_eix;
+
     /* MSI */
     const struct imsic_msi *msi;
 
@@ -97,5 +104,7 @@ unsigned int vcpu_guest_file_id(const struct vcpu *v);
 int vimsic_make_domu_dt_node(struct kernel_info *kinfo, unsigned int *phandle);
 
 int imsic_map_guest_file(struct vcpu *v, unsigned int vsfile_id);
+
+void imsic_vsfile_attach(struct vcpu *v);
 
 #endif /* RISCV_IMSIC_H */

@@ -153,7 +153,8 @@ static void vaplic_target_write(const struct domain *d, unsigned int irqn,
      * The h/w register names the hart and the guest interrupt file MSIs are
      * sent to, and there is none of either until the target vCPU is given a
      * h/w guest interrupt file, so until then only the stored copy is
-     * updated.
+     * updated. imsic_vsfile_attach() writes it to the h/w, through
+     * vaplic_reconfigure_target(), once there is such a file.
      *
      * TODO: once s/w guest interrupt files are supported, a vCPU using one
      * still needs its MSIs, so the h/w register will have to be written for
