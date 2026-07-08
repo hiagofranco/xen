@@ -454,7 +454,26 @@ static int emulate_load(const struct guest_fault *gf)
 
 static int emulate_store(const struct guest_fault *gf)
 {
-    return -EOPNOTSUPP;
+    struct cpu_user_regs *regs = gf->regs;
+    mmio_info_t info = { .is_write = true };
+    struct decoded_insn di = {};
+    int rc;
+
+    if ( insn_fetch_faulted(gf, &di) )
+        return 0;
+
+    if ( !decode_ldst_insn(&di, guest_xlen(regs)) || !di.is_write )
+        return -EOPNOTSUPP;
+
+    info.data = *guest_gpr(regs, &di);
+
+    rc = do_mmio(&info, gf->gpa, di.len);
+    if ( rc )
+        return rc;
+
+    advance_pc(regs, di.insn_len);
+
+    return 0;
 }
 
 static void inject_access_fault(const struct guest_fault *gf)
