@@ -65,6 +65,14 @@
 #define SSTATUS64_UXL			MSTATUS_UXL
 #define SSTATUS64_SD			MSTATUS64_SD
 
+/*
+ * Width encoded by the MXL, SXL, UXL and VSXL fields, all of which share one
+ * encoding. 0 is reserved.
+ */
+#define XLEN_FIELD_32			_UL(1)
+#define XLEN_FIELD_64			_UL(2)
+#define XLEN_FIELD_128			_UL(3)
+
 #if __riscv_xlen == 64
 #define HSTATUS_VSXL			_UL(0x300000000)
 #define HSTATUS_VSXL_SHIFT		32
@@ -854,6 +862,10 @@
 /* 32-bit write for VS-stage address translation (VSXLEN=32) */
 #define INSN_PSEUDO_VS_STORE32		0x00002020
 
+#define INSN_OPCODE_MASK		0x7f
+#define INSN_OPCODE_LOAD		0x03
+#define INSN_OPCODE_STORE		0x23
+
 #define INSN_IS_16BIT(insn)	(((insn) & 3) != 3)
 #define INSN_IS_32BIT(insn)	(!INSN_IS_16BIT(insn) && ((insn) & 0x1c) != 0x1c)
 
@@ -895,6 +907,8 @@
 					 (RV_X(x, 7, 2) << 6))
 #define RVC_SDSP_IMM(x)			((RV_X(x, 10, 3) << 3) | \
 					 (RV_X(x, 7, 3) << 6))
+#define RV_RD(insn)			RV_X(insn, SH_RD, 5)
+#define RV_RS2(insn)			RV_X(insn, SH_RS2, 5)
 #define RVC_RS1S(insn)			(8 + RV_X(insn, SH_RD, 3))
 #define RVC_RS2S(insn)			(8 + RV_X(insn, SH_RS2C, 3))
 #define RVC_RS2(insn)			RV_X(insn, SH_RS2C, 5)

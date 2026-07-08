@@ -13,8 +13,39 @@
 #include <asm/csr.h>
 #include <asm/current.h>
 #include <asm/emulate.h>
+#include <asm/guest_access.h>
+#include <asm/processor.h>
+#include <asm/regs.h>
 #include <asm/riscv_encoding.h>
 #include <asm/traps.h>
+
+/*
+ * Determine the trapped load or store instruction which caused a guest MMIO
+ * trap.
+ */
+struct decoded_insn {
+    /*
+     * The trapped instruction: as read from guest memory, or the 32-bit
+     * equivalent the hardware transformed it into (see insn_fetch_faulted()).
+     * None of the extensions exposed to guests has instructions wider than
+     * 32 bits, and insn_fetch_faulted() rejects anything longer.
+     */
+    uint32_t insn;
+    /*
+     * Length in bytes of the trapped instruction in guest memory: 2 or 4.
+     * This need not be the length of the encoding in insn, as a compressed
+     * instruction may have been transformed into its 32-bit equivalent.
+     */
+    uint8_t insn_len;
+    /* Width of the memory access, in bytes. */
+    uint8_t len;
+    /* Number of the register operand: rd for a load, rs2 for a store. */
+    uint8_t reg;
+    /* The access is a store rather than a load. */
+    bool is_write:1;
+    /* The load zero-extends its result rather than sign-extending it. */
+    bool is_unsigned:1;
+};
 
 /*
  * The hardware-reported details of a guest page fault, gathered once by
@@ -38,6 +69,65 @@ struct guest_fault {
     /* The faulting guest physical address, filled by resolve_faulting_gpa(). */
     paddr_t gpa;
 };
+
+static void advance_pc(struct cpu_user_regs *regs, unsigned int step)
+{
+    regs->sepc += step;
+}
+
+/*
+ * The effective XLEN of the guest at the point of the trap: hstatus.VSXL for a
+ * trap taken from VS-mode, vsstatus.UXL for one taken from VU-mode.
+ *
+ * VSXL is consulted whichever mode the trap came from: if VSXL says 32,
+ * vsstatus has no UXL field, so VU-mode is 32-bit as well and there is
+ * nothing to configure.
+ *
+ * It is needed to decode a trapped instruction: the encodings which exist only
+ * for XLEN=64 must not be recognized for a 32-bit guest. Besides those simply
+ * being reserved there, the compressed ones are ambiguous: C.LD and C.FLW
+ * share the encoding 0x6000 (mask 0xe003), and likewise C.SD/C.FSW,
+ * C.LDSP/C.FLWSP and C.SDSP/C.FSWSP.
+ *
+ * IS_ENABLED() can't be used here as HSTATUS_VSXL is defined for
+ * __riscv_xlen == 64 only, the field not existing on RV32 in the first place.
+ */
+static unsigned int guest_xlen(const struct cpu_user_regs *regs)
+{
+#ifdef CONFIG_RISCV_32
+    return 32;
+#else
+    unsigned int xl = MASK_EXTR(regs->hstatus, HSTATUS_VSXL);
+
+    if ( (xl > XLEN_FIELD_32) && !(regs->sstatus & SSTATUS_SPP) )
+        xl = MASK_EXTR(csr_read(CSR_VSSTATUS), SSTATUS64_UXL);
+
+    switch ( xl )
+    {
+    case XLEN_FIELD_32:
+        return 32;
+
+    case XLEN_FIELD_64:
+        return 64;
+
+    default:
+        /*
+         * The field holds nothing else in practice: XLEN_FIELD_128 would mean
+         * RV128, which no implementation provides, and the only value left is
+         * reserved. ASSERT_UNREACHABLE() being debug-only, a width still has
+         * to be answered in release builds.
+         *
+         * Answer 32, that being the safe way to be wrong: the decoder then
+         * fails to recognize the RV64-only encodings and emulation gives up.
+         * Answering 64 for what may well be a 32-bit guest would instead have
+         * it take C.FLW for C.LD and C.FSW for C.SD (see above), i.e. quietly
+         * emulate an access of the wrong width against the wrong register.
+         */
+        ASSERT_UNREACHABLE();
+        return 32;
+    }
+#endif
+}
 
 /*
  * Is @htinst one of the special pseudoinstruction values, reported for a guest
@@ -86,8 +176,253 @@ static int resolve_faulting_gpa(struct guest_fault *gf)
     return 0;
 }
 
+/*
+ * Where the value of a decoded instruction's register operand is held.
+ *
+ * The register is held at its full width, whatever the guest's XLEN is (see
+ * guest_xlen()). Where XLEN is narrower, the bits above it are not guaranteed
+ * to be zero, nor even a sign extension: hardware only ignores them in source
+ * operands, so they may have been left there by more privileged code running
+ * at a wider XLEN. Hence callers must not rely on those bits when reading a
+ * value, and must sign-extend what they write from bit XLEN-1, as hardware
+ * does for the result of an operation.
+ */
+static unsigned long *guest_gpr(struct cpu_user_regs *regs,
+                                const struct decoded_insn *di)
+{
+    /*
+     * decode_ldst_insn() is what fills @di in, and it rejects an access
+     * wider than a guest register.
+     */
+    ASSERT(di->len <= (guest_xlen(regs) / BITS_PER_BYTE));
+
+    return regs_gpr_ptr(regs, di->reg);
+}
+
+/*
+ * Obtain the instruction which caused a guest MMIO trap, filling in
+ * @di->insn and @di->insn_len. It either comes transformed in htinst, or has
+ * to be fetched from guest memory.
+ *
+ * Returns true if the fetch faulted in turn; the resulting trap has then
+ * already been redirected to the guest and there is nothing further for the
+ * caller to do. Where it returns false, @di has been filled in and emulation
+ * is to continue.
+ */
+static bool insn_fetch_faulted(const struct guest_fault *gf,
+                               struct decoded_insn *di)
+{
+    unsigned long htinst = gf->htinst;
+
+    /*
+     * A pseudoinstruction says nothing about the instruction the guest was
+     * executing, and comes with a guest physical address which isn't the one
+     * that instruction accessed. handle_guest_page_fault() deals with such a
+     * fault on its own, so no emulation can ever start for one.
+     */
+    ASSERT(!htinst_is_pseudo(htinst));
+
+    /*
+     * Bit[0] == 1 implies trapped instruction value is transformed instruction
+     * or custom value. A transformed instruction is a 32-bit encoding, so a
+     * value with any bit above bit[31] set is a custom one, which is of no use
+     * for decoding: fetch the instruction from guest memory then, as for zero.
+     */
+    if ( (htinst & BIT(0, UL)) && (htinst == (uint32_t)htinst) )
+    {
+        /*
+         * A compressed instruction is reported already expanded to its 32-bit
+         * equivalent, so htinst always holds a 32-bit encoding, except for
+         * bits[1:0], which hold a marker: bit[0] is set to flag the
+         * transformation and bit[1] is clear if the trapped instruction was
+         * compressed. Setting both bits gives a 32-bit encoding
+         * decode_ldst_insn() can decode. (Its handling of compressed
+         * encodings is for the branch below, which reads the instruction from
+         * guest memory as is.)
+         *
+         * The length then cannot come from the value anymore, only from
+         * bit[1]. And only a 16- or a 32-bit instruction is ever reported
+         * this way: the standard load and store instructions the hardware
+         * transforms are all of one of these two lengths, anything else comes
+         * as the zero special value handled below.
+         */
+        di->insn = htinst | 3;
+        di->insn_len = (htinst & BIT(1, UL)) ? 4 : 2;
+    }
+    else
+    {
+        const struct cpu_user_regs *regs = gf->regs;
+        struct trap_info utrap = {};
+
+        /*
+         * Bit[0] == 0 implies trapped instruction value is zero or special
+         * value. Pseudoinstructions never get here (see the comment ahead of
+         * the ASSERT() above), so only zero (or a custom value, see above) is
+         * left: the instruction has to be read from guest memory.
+         */
+
+        di->insn = read_guest(regs->sepc, true, &utrap);
+        if ( utrap.scause )
+        {
+            /*
+             * If a G-stage translation fault happens while fetching the
+             * trapped instruction, CAUSE_LOAD_GUEST_PAGE_FAULT is generated,
+             * hlvx being a load. Such a fault is reported to the guest as an
+             * instruction access fault.
+             */
+            if ( utrap.scause == CAUSE_LOAD_GUEST_PAGE_FAULT )
+                utrap.scause = CAUSE_FETCH_ACCESS;
+
+            /*
+             * Not set in the initializer: on a fault read_guest() leaves in
+             * utrap.sepc the address of its own faulting access, whereas the
+             * trap is to be reported at the guest instruction.
+             */
+            utrap.sepc = regs->sepc;
+
+            trap_redirect(&utrap);
+
+            return true;
+        }
+
+        di->insn_len = INSN_LEN(di->insn);
+
+        /*
+         * read_guest() fetches at most two halfwords, so a wider encoding has
+         * been read in part only and cannot be decoded here.
+         *
+         * Report an illegal instruction: none of the extensions exposed to
+         * guests has instructions wider than 32 bits, so such an encoding is
+         * not a valid instruction for the guest in the first place.
+         *
+         * The same goes for a compressed encoding where C isn't exposed to the
+         * guest. The instruction in guest memory may have changed since the
+         * trap, so what is read back must not be assumed to be what trapped,
+         * nor to be valid for the guest.
+         */
+        if ( !di->insn_len ||
+             (di->insn_len == 2 &&
+              !riscv_isa_extension_available(current->domain->arch.isa,
+                                             RISCV_ISA_EXT_c)) )
+        {
+            utrap.sepc = regs->sepc;
+            utrap.scause = CAUSE_ILLEGAL_INSTRUCTION;
+            /*
+             * stval is left zero, which the spec allows for an illegal
+             * instruction: only part of the instruction is in hand, and stval,
+             * being only XLEN bits wide, may not be able to hold all of it
+             * anyway.
+             */
+
+            trap_redirect(&utrap);
+
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/*
+ * Decode the load or store instruction fetched into @di, filling in the
+ * remaining fields of it (@di->insn and @di->insn_len are filled by
+ * insn_fetch_faulted()). Fields which don't apply to the instruction are left
+ * alone, so @di is expected to start out zeroed.
+ *
+ * @xlen is the effective XLEN of the guest, needed as the encodings which
+ * exist for XLEN=64 only must not be recognized for a 32-bit guest.
+ *
+ * Returns false if the instruction is not a load or store, or cannot be
+ * emulated here.
+ */
+static bool decode_ldst_insn(struct decoded_insn *di, unsigned int xlen)
+{
+    uint32_t insn = di->insn;
+    unsigned int funct3, width_log2;
+
+    if ( INSN_IS_16BIT(insn) )
+    {
+        /*
+         * C.LW, C.LD, C.SW and C.SD (bits[1:0] == 00), and their sp-relative
+         * C.*SP forms (bits[1:0] == 10), have bits[15:13] of the form x1y:
+         * x is set for a store, and y selects a width of 4 or 8 bytes.
+         */
+        funct3 = RV_X(insn, 13, 3);
+
+        if ( (insn & 1) || !(funct3 & 2) )
+            return false;
+
+        di->is_write = funct3 & 4;
+        width_log2 = 2 + (funct3 & 1);
+
+        if ( !(insn & 2) )
+            /* Quadrant 0: bits[4:2] encode rd' (load) or rs2' (store) */
+            di->reg = RVC_RS2S(insn);
+        else if ( di->is_write )
+            /* Quadrant 2 (CSS): bits[6:2] encode rs2 for C.SWSP / C.SDSP */
+            di->reg = RVC_RS2(insn);
+        else
+        {
+            /* Quadrant 2 (CI): bits[11:7] encode rd for C.LWSP / C.LDSP */
+            di->reg = RV_RD(insn);
+
+            /* C.LWSP and C.LDSP are reserved with rd being x0. */
+            if ( !di->reg )
+                return false;
+        }
+    }
+    else
+    {
+        /*
+         * LOAD and STORE (I/S-type) have funct3 in bits[14:12]: funct3[1:0]
+         * is log2 of the width in bytes, and funct3[2] selects zero-extension
+         * for a load, while being reserved for a store.
+         */
+        funct3 = RV_X(insn, 12, 3);
+        width_log2 = funct3 & 3;
+
+        switch ( insn & INSN_OPCODE_MASK )
+        {
+        case INSN_OPCODE_LOAD:
+            di->is_unsigned = funct3 & 4;
+            di->reg = RV_RD(insn);
+            break;
+
+        case INSN_OPCODE_STORE:
+            if ( funct3 & 4 )
+                return false;
+            di->is_write = true;
+            di->reg = RV_RS2(insn);
+            break;
+
+        default:
+            return false;
+        }
+    }
+
+    di->len = 1U << width_log2;
+
+    /*
+     * No access is wider than XLEN, and one as wide as XLEN exists only in
+     * its sign-extending form: this rules out the encodings which exist for
+     * XLEN=64 only on a 32-bit guest, including C.FLW for C.LD (and alike).
+     */
+    if ( (di->len * BITS_PER_BYTE > xlen) ||
+         (di->is_unsigned && di->len * BITS_PER_BYTE == xlen) )
+        return false;
+
+    return true;
+}
+
 static int emulate_load(const struct guest_fault *gf)
 {
+    /* Transient, until the helpers gain their users. */
+    (void)advance_pc;
+    (void)guest_xlen;
+    (void)guest_gpr;
+    (void)insn_fetch_faulted;
+    (void)decode_ldst_insn;
+
     return -EOPNOTSUPP;
 }
 
