@@ -377,7 +377,60 @@ static int emulate_load(unsigned long fault_addr, unsigned long htinst)
 
 static int emulate_store(unsigned long fault_addr, unsigned long htinst)
 {
-    return -EOPNOTSUPP;
+    struct cpu_user_regs *regs = vcpu_guest_cpu_user_regs(current);
+    mmio_info_t info = { .is_write = true };
+    register_t data;
+    unsigned long insn;
+    unsigned int len, insn_len;
+    int rc;
+
+    if ( decode_trapped_insn(htinst, &insn, &insn_len) )
+        return 0;
+
+    data = GET_RS2(insn, regs);
+
+    if ( (insn & INSN_MASK_SB) == INSN_MATCH_SB )
+        len = 1;
+    else if ( (insn & INSN_MASK_SH) == INSN_MATCH_SH )
+        len = 2;
+    else if ( (insn & INSN_MASK_SW) == INSN_MATCH_SW )
+        len = 4;
+    else if ( (insn & INSN_MASK_C_SW) == INSN_MATCH_C_SW )
+    {
+        len = 4;
+        data = GET_RS2S(insn, regs);
+    }
+    else if ( (insn & INSN_MASK_C_SWSP) == INSN_MATCH_C_SWSP )
+    {
+        len = 4;
+        data = GET_RS2C(insn, regs);
+    }
+#ifndef CONFIG_RISCV_32
+    else if ( (insn & INSN_MASK_SD) == INSN_MATCH_SD )
+        len = 8;
+    else if ( (insn & INSN_MASK_C_SD) == INSN_MATCH_C_SD )
+    {
+        len = 8;
+        data = GET_RS2S(insn, regs);
+    }
+    else if ( (insn & INSN_MASK_C_SDSP) == INSN_MATCH_C_SDSP )
+    {
+        len = 8;
+        data = GET_RS2C(insn, regs);
+    }
+#endif
+    else
+        return -EOPNOTSUPP;
+
+    info.data = data;
+
+    rc = do_mmio(&info, fault_addr, len);
+    if ( rc )
+        return rc;
+
+    advance_pc(regs, insn_len);
+
+    return 0;
 }
 
 static void handle_guest_page_fault(unsigned long cause,
