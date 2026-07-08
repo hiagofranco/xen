@@ -14,6 +14,7 @@
 #include <asm/current.h>
 #include <asm/emulate.h>
 #include <asm/guest_access.h>
+#include <asm/mmio.h>
 #include <asm/processor.h>
 #include <asm/regs.h>
 #include <asm/riscv_encoding.h>
@@ -416,14 +417,39 @@ static bool decode_ldst_insn(struct decoded_insn *di, unsigned int xlen)
 
 static int emulate_load(const struct guest_fault *gf)
 {
-    /* Transient, until the helpers gain their users. */
-    (void)advance_pc;
-    (void)guest_xlen;
-    (void)guest_gpr;
-    (void)insn_fetch_faulted;
-    (void)decode_ldst_insn;
+    struct cpu_user_regs *regs = gf->regs;
+    mmio_info_t info = { .is_write = false };
+    struct decoded_insn di = {};
+    unsigned int shift;
+    int rc;
 
-    return -EOPNOTSUPP;
+    /* A fault taken re-reading the instruction is redirected to the guest. */
+    if ( insn_fetch_faulted(gf, &di) )
+        return 0;
+
+    if ( !decode_ldst_insn(&di, guest_xlen(regs)) || di.is_write )
+        return -EOPNOTSUPP;
+
+    shift = BITS_PER_BYTE * (sizeof(info.data) - di.len);
+
+#ifdef EMULATE_LOAD_DEBUG
+    gdprintk(XENLOG_DEBUG, "pc=%#lx, addr=%#"PRIpaddr", len=%u, shift=%u\n",
+             regs->sepc, gf->gpa, di.len, shift);
+#endif
+
+    rc = do_mmio(&info, gf->gpa, di.len);
+    if ( rc )
+        return rc;
+
+    /* A load into x0 discards its result. */
+    if ( di.reg )
+        *guest_gpr(regs, &di) = di.is_unsigned
+                                ? (info.data << shift) >> shift
+                                : (long)(info.data << shift) >> shift;
+
+    advance_pc(regs, di.insn_len);
+
+    return 0;
 }
 
 static int emulate_store(const struct guest_fault *gf)
