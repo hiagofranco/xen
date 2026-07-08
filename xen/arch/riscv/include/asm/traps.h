@@ -4,6 +4,7 @@
 #define ASM__RISCV__TRAPS_H
 
 #include <asm/processor.h>
+#include <asm/riscv_encoding.h>
 
 #ifndef __ASSEMBLER__
 
@@ -12,6 +13,11 @@ struct trap_info {
     register_t scause;
     register_t stval;
 };
+
+static inline bool is_load_guest_page_fault(unsigned long scause)
+{
+    return (scause == CAUSE_LOAD_GUEST_PAGE_FAULT);
+}
 
 void do_trap(struct cpu_user_regs *cpu_regs);
 void handle_trap(void);
