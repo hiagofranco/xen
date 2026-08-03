@@ -501,6 +501,17 @@ static void cf_check aplic_set_irq_type(struct irq_desc *desc,
     spin_unlock(&aplic.lock);
 }
 
+static int cf_check aplic_init_cpu_intc(void)
+{
+    /*
+     * APLIC is used in MSI delivery mode only, so all of its S-domain state
+     * is global. What is private to a CPU is its IMSIC S-file.
+     */
+    imsic_ids_local_delivery(true);
+
+    return 0;
+}
+
 static const hw_irq_controller aplic_xen_irq_type = {
     .typename     = "aplic",
     .startup      = aplic_irq_startup,
@@ -542,6 +553,7 @@ static const hw_irq_controller aplic_guest_irq_type = {
 
 static const struct intc_hw_operations aplic_ops = {
     .info                = &aplic_info,
+    .init_cpu_intc       = aplic_init_cpu_intc,
     .host_irq_type       = &aplic_xen_irq_type,
     .guest_irq_type      = &aplic_guest_irq_type,
     .handle_interrupt    = aplic_handle_interrupt,
@@ -589,9 +601,6 @@ static int __init aplic_preinit(struct dt_device_node *node, const void *dat)
     dt_irq_xlate = aplic_irq_xlate;
 
     register_intc_ops(&aplic_init_ops);
-
-    /* Enable supervisor external interrupt */
-    csr_set(CSR_SIE, BIT(IRQ_S_EXT, UL));
 
     return 0;
 }

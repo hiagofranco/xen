@@ -34,6 +34,12 @@ struct intc_hw_operations {
     /* Hold intc hw information */
     const struct intc_info *info;
 
+    /*
+     * Initialize the interrupt controller state which is private to the
+     * current CPU. Always executed on the CPU being brought up.
+     */
+    int (*init_cpu_intc)(void);
+
     /* hw_irq_controller to enable/disable/eoi host irq */
     const struct hw_interrupt_type *host_irq_type;
 
@@ -103,6 +109,8 @@ void intc_preinit(void);
 void register_intc_ops(const struct intc_hw_init_ops *init_ops);
 
 void intc_init(void);
+
+void intc_init_cpu(void);
 
 void intc_route_irq_to_xen(struct irq_desc *desc, unsigned int priority);
 int intc_route_irq_to_guest(const struct domain *d, unsigned int virq,

@@ -14,7 +14,9 @@
 #include <xen/xvmalloc.h>
 
 #include <asm/aia.h>
+#include <asm/csr.h>
 #include <asm/intc.h>
+#include <asm/riscv_encoding.h>
 #include <asm/vaplic.h>
 
 static const struct intc_hw_operations *__ro_after_init intc_hw_ops;
@@ -43,6 +45,29 @@ void __init intc_init(void)
 
     if ( intc_hw_init_ops->init() )
         panic("Failed to initialize the interrupt controller drivers\n");
+
+    intc_init_cpu();
+}
+
+void intc_init_cpu(void)
+{
+    ASSERT(intc_hw_ops);
+
+    if ( intc_hw_ops->init_cpu_intc )
+    {
+        int rc = intc_hw_ops->init_cpu_intc();
+
+        if ( rc )
+        {
+            printk(XENLOG_ERR
+                   "CPU%u: intc init failed (%d), external interrupts stay masked\n",
+                   smp_processor_id(), rc);
+
+            return;
+        }
+    }
+
+    csr_set(CSR_SIE, BIT(IRQ_S_EXT, UL));
 }
 
 /* desc->irq needs to be disabled before calling this function */
