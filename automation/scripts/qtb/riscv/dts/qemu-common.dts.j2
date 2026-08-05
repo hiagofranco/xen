@@ -1,0 +1,17 @@
+{#- Shared Jinja helpers for the qtb DT templates -#}
+
+{%- set IRQ_TYPE_LEVEL_HIGH = 4 %}
+
+{#- #interrupt-cells for the APLIC-IMSIC interrupt controller: interrupts are
+    <irq type> pairs, so two cells. -#}
+{%- set interrupt_cells = 2 %}
+
+{#- Build the `interrupts` value for one device, given the interrupt-parent's
+    #interrupt-cells (`cells`). Each irq is one specifier taking `cells` u32s,
+    filled from the tuple (irq, type, ...):
+      cells=2 -> <irq type>
+      cells=n -> <irq type f3 .. fn>
+-#}
+{%- macro interrupts(d, cells) -%}
+    {% for irq in d.irqs %}{{ [irq, d.type][:cells] | join(' ') }}{{ " " if not loop.last }}{% endfor %}
+{%- endmacro -%}

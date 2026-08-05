@@ -1,0 +1,144 @@
+/dts-v1/;
+
+{#-
+ * Jinja2 QEMU "virt" platform device tree for Xen RISC-V tests.
+ *
+ * Interrupt controller: APLIC in MSI mode + IMSIC
+ * (QEMU -M virt,aia=aplic-imsic).
+ *
+ * Rendered by xen_dt.py.
+ *
+ * Variables:
+ *   ncpus        - number of physical harts               (int, >= 1)
+ *   mmu_type     - Xen host MMU type, e.g. "sv39"          (string)
+ *   xen_bootargs - Xen command line                        (string)
+ *   guest_index_bits   - IMSIC guest-index-bits, must match the QEMU
+ *                  machine's `aia-guests=N` arg             (int, >= 0)
+ *
+ * Per-hart nodes are labelled cpu<i> / cpu<i>_intc and referenced with &label.
+ *
+ * Per-hart IMSIC S-mode reg size: ncpus * 2**guest_index_bits * 0x1000
+ *                        M-mode: ncpus * 0x1000
+-#}
+{%- import "qemu-common.dts.j2" as c with context -%}
+
+{%- set IRQ_M_SOFT = 3 %}
+{%- set IRQ_M_TIMER = 7 %}
+{%- set IRQ_S_EXT = 9 %}
+{%- set IRQ_M_EXT = 11 %}
+
+/ {
+    #address-cells = <0x02>;
+    #size-cells = <0x02>;
+    compatible = "riscv-virtio";
+    model = "riscv-virtio,qemu";
+
+    memory@80000000 {
+        device_type = "memory";
+        reg = <0x00 0x80000000 0x00 0x80000000>;
+    };
+
+    cpus {
+        #address-cells = <0x01>;
+        #size-cells = <0x00>;
+        timebase-frequency = <0x989680>;
+{% for i in range(ncpus) %}
+        cpu{{ i }}: cpu@{{ i }} {
+            device_type = "cpu";
+            reg = <0x{{ '%x' % i }}>;
+            status = "okay";
+            compatible = "riscv";
+            riscv,cbop-block-size = <0x40>;
+            riscv,cboz-block-size = <0x40>;
+            riscv,cbom-block-size = <0x40>;
+            riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "h", "zicntr", "zicsr", "zifencei", "zihintpause", "zihpm", "zba", "zbb", "zbs", "smstateen", "svpbmt", "smaia", "ssaia";
+            riscv,isa-base = "rv64i";
+            riscv,isa = "rv64imafdch_zicntr_zicsr_zifencei_zihintpause_zihpm_zba_zbb_zbs_smstateen_svpbmt_smaia_ssaia";
+            mmu-type = "riscv,{{ mmu_type }}";
+
+            cpu{{ i }}_intc: interrupt-controller@{{ i }} {
+                #interrupt-cells = <0x01>;
+                interrupt-controller;
+                compatible = "riscv,cpu-intc";
+            };
+        };
+{% endfor %}
+        cpu-map {
+
+            cluster0 {
+{% for i in range(ncpus) %}
+                core{{ i }} {
+                    cpu = <&cpu{{ i }}>;
+                };
+{% endfor %}
+            };
+        };
+    };
+
+    soc {
+        #address-cells = <0x02>;
+        #size-cells = <0x02>;
+        compatible = "simple-bus";
+        ranges;
+
+        serial@10000000 {
+            interrupts = <{{ c.interrupts({'irqs':[10],'type':c.IRQ_TYPE_LEVEL_HIGH}, c.interrupt_cells) }}>;
+            interrupt-parent = <&aplic_s>;
+            clock-frequency = <0x384000>;
+            reg = <0x00 0x10000000 0x00 0x100>;
+            compatible = "ns16550a";
+        };
+
+        aplic_s: aplic@d000000 {
+            riscv,num-sources = <0x60>;
+            reg = <0x00 0xd000000 0x00 0x8000>;
+            msi-parent = <&imsic_s>;
+            interrupt-controller;
+            #interrupt-cells = <0x02>;
+            compatible = "riscv,aplic";
+        };
+
+        aplic@c000000 {
+            riscv,delegate = <&aplic_s 0x01 0x60>;
+            riscv,children = <&aplic_s>;
+            riscv,num-sources = <0x60>;
+            reg = <0x00 0xc000000 0x00 0x8000>;
+            msi-parent = <&imsic_m>;
+            interrupt-controller;
+            #interrupt-cells = <0x02>;
+            compatible = "riscv,aplic";
+        };
+
+        imsic_s: imsics@28000000 {
+            riscv,guest-index-bits = <0x{{ '%x' % guest_index_bits }}>;
+            riscv,num-ids = <0xff>;
+            reg = <0x00 0x28000000 0x00 0x{{ '%x' % (ncpus * 2**guest_index_bits * 0x1000) }}>;
+            interrupts-extended = <{% for i in range(ncpus) %}&cpu{{ i }}_intc {{ IRQ_S_EXT }}{{ " " if not loop.last }}{% endfor %}>;
+            msi-controller;
+            interrupt-controller;
+            #interrupt-cells = <0x00>;
+            compatible = "riscv,imsics";
+        };
+
+        imsic_m: imsics@24000000 {
+            riscv,num-ids = <0xff>;
+            reg = <0x00 0x24000000 0x00 0x{{ '%x' % (ncpus * 0x1000) }}>;
+            interrupts-extended = <{% for i in range(ncpus) %}&cpu{{ i }}_intc {{ IRQ_M_EXT }}{{ " " if not loop.last }}{% endfor %}>;
+            msi-controller;
+            interrupt-controller;
+            #interrupt-cells = <0x00>;
+            compatible = "riscv,imsics";
+        };
+
+        clint@2000000 {
+            interrupts-extended = <{% for i in range(ncpus) %}&cpu{{ i }}_intc {{ IRQ_M_SOFT }} &cpu{{ i }}_intc {{ IRQ_M_TIMER }}{{ " " if not loop.last }}{% endfor %}>;
+            reg = <0x00 0x2000000 0x00 0x10000>;
+            compatible = "sifive,clint0", "riscv,clint0";
+        };
+    };
+
+    chosen {
+        stdout-path = "/soc/serial@10000000";
+        xen,xen-bootargs = "{{ xen_bootargs }}";
+    };
+};
