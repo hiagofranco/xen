@@ -11,6 +11,9 @@ variables:
   ARTIFACTS_BRANCH:
     description: "Branch in test-artifacts to use"
     value: master
+  ARTIFACTS_REGISTRY:
+    description: "Registry holding the test-artifacts containers"
+    value: registry.gitlab.com/xen-project/hardware/test-artifacts
   LINUX_JOB_X86_64:
     description: "Job name in test-artifacts to use for Linux x86_64"
     value: linux-6.6.56-x86_64

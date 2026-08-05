@@ -5,6 +5,11 @@
   - if: $CI_JOB_NAME =~ $SELECTED_JOBS_ONLY
     when: on_success
 
+.riscv64-test-needs: &riscv64-test-needs
+  - project: $ARTIFACTS_REPO
+    job: qemu-9.0.0-riscv64
+    ref: $ARTIFACTS_BRANCH
+
 .arm64-test-needs: &arm64-test-needs
   - project: $ARTIFACTS_REPO
     job: $LINUX_JOB_ARM64
@@ -72,14 +77,21 @@
     TEST_TIMEOUT_OVERRIDE: 120
 
 .qemu-riscv64:
+  image: ${ARTIFACTS_REGISTRY}/${CONTAINER}
   extends: .test-jobs-common
   variables:
-    CONTAINER: debian:13-riscv64
-    LOGFILE: qemu-smoke-riscv64.log
+    CONTAINER: debian:13-qtb-riscv64
+    QTB_LOG_DIR: qtb-logs
+    QTB_BINARIES_DIR: ${CI_PROJECT_DIR}/binaries
+  script:
+    - ./automation/scripts/qtb/riscv/run_test.py
+      ${QTB_TEST_TYPE}
+      run
+      ${QTB_TEST}
+      --log-dir ${QTB_LOG_DIR}
   artifacts:
     paths:
-      - smoke.serial
-      - '*.log'
+      - ${QTB_LOG_DIR}
     when: always
   tags:
     - x86_64
@@ -779,9 +791,11 @@ qemu-xtf-argo-x86_64-gcc-debug:
 
 qemu-smoke-riscv64-gcc:
   extends: .qemu-riscv64
-  script:
-    - ./automation/scripts/qemu-smoke-riscv64.sh 2>&1 | tee ${LOGFILE}
+  variables:
+    QTB_TEST_TYPE: console-test
+    QTB_TEST: dom0less-1smp-0domu-1vcpu-aplic-imsic-null
   needs:
+    - *riscv64-test-needs
     - debian-13-riscv64-gcc-debug
 
 qemu-smoke-ppc64le-powernv9-gcc:
