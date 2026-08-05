@@ -1,0 +1,24 @@
+# Shared config for the qtb riscv64 tests
+#
+# A machine is the test-agnostic description of what to boot (cpus, memory,
+# interrupt controller). Test YAMLs (e.g. console-test.yaml) pick a machine by
+# name and layer their own parameters on top.
+#
+# Path resolution (see paths.py): `binaries:` entries resolve against
+# $QTB_BINARIES_DIR env var if defined else `binaries`. Absolute paths used
+# as-is.
+
+binaries:
+  qemu:     qemu-system-riscv64
+  firmware: opensbi-riscv64-generic-fw_dynamic.bin
+  xen:      xen
+
+.aplic-imsic: &aplic_imsic
+  aia_guests: 7
+  interrupt_controller: aplic-imsic
+
+machines:
+  dom0less-1smp-0domu-1vcpu-aplic-imsic-null:
+    <<: *aplic_imsic
+    xen_bootargs: "sched=null"
+    pcpu: 1
