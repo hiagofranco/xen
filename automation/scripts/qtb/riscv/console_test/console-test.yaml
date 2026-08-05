@@ -1,0 +1,18 @@
+# Console string expectation test (run with: run_test.py console-test run <test>).
+#
+# Each test uses a machine from config.yaml and maps a console index to the list
+# of string(s) expected on that console: 0 is Xen's own console. The runner boots
+# the machine and asserts each string is printed within the timeout. Nothing is
+# injected.
+#
+# Test options:
+#   timeout: int  # timeout between each string match (in seconds)
+#   attempts: int # number of tries for a wait before failing. Default 3 (min = 1)
+
+machine_catalog: config.yaml
+
+tests:
+  dom0less-1smp-0domu-1vcpu-aplic-imsic-null:
+    machine: dom0less-1smp-0domu-1vcpu-aplic-imsic-null
+    expect:
+      0: [All set up]

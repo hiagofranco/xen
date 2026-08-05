@@ -26,6 +26,8 @@ from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 
+# Importing the test-type modules registers their RiscvQtbTest subclasses.
+from console_test import ConsoleTest  # noqa: F401  (registers ConsoleTest)
 from qtb_test import RiscvQtbTest
 from riscv64_test_machine import RiscvTestMachine
 
