@@ -1,0 +1,6 @@
+tftpboot 0x84000000 /data/tftp/p550/xen.uImage
+tftpboot 0x88000000 /data/tftp/p550/eic7700-hifive-premier-p550.dtb
+tftpboot 0x808ef000 /data/tftp/p550/Image.gz
+tftpboot 0x90400000 /data/tftp/p550/initrd.img
+
+bootm 0x84000000 - 0x88000000

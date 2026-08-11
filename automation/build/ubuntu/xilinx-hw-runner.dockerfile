@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM --platform=linux/amd64 ubuntu:16.04
+FROM --platform=linux/amd64 ubuntu:26.04
 LABEL maintainer.name="The Xen Project"
 LABEL maintainer.email="xen-devel@lists.xenproject.org"
 
@@ -29,4 +29,5 @@ RUN <<EOF
 EOF
 
 USER root
+COPY p550.dtb /dtb/p550.dtb
 WORKDIR /build

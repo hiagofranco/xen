@@ -21,6 +21,14 @@
 .arm32-test-needs: &arm32-test-needs
   -
 
+.riscv64-test-needs: &riscv64-test-needs
+  - project: $ARTIFACTS_REPO
+    job: $LINUX_JOB_RISCV64
+    ref: $ARTIFACTS_BRANCH
+  - project: $ARTIFACTS_REPO
+    job: buildroot-2025.02.15-riscv64-initrd
+    ref: $ARTIFACTS_BRANCH
+
 .x86_64-test-needs: &x86_64-test-needs
   - project: $ARTIFACTS_REPO
     job: $LINUX_JOB_X86_64
@@ -148,6 +156,24 @@
   tags:
     - xilinx-crater-001
 
+.minervasys-riscv64:
+  extends: .test-jobs-common
+  variables:
+    CONTAINER: ubuntu:minervasys-hw-runner
+    TEST_BOARD: "p550"
+    TEST_TIMEOUT_OVERRIDE: 1000
+  artifacts:
+    paths:
+      - smoke.serial
+      - '*.log'
+    when: always
+  rules:
+    - if: $CI_JOB_NAME =~ $SELECTED_JOBS_ONLY && $MINERVASYS_JOBS == "true"
+          && $CI_COMMIT_REF_PROTECTED == "true"
+      when: on_success
+  tags:
+    - minervasys
+
 .adl-x86_64:
   extends: .test-jobs-common
   variables:
@@ -272,6 +298,14 @@ xilinx-smoke-dom0-x86_64-gcc-debug-argo:
     - project: xen-project/hardware/test-artifacts
       job: microcode-x86
       ref: master
+
+p550-smoke-riscv64-gcc-debug:
+  extends: .minervasys-riscv64
+  script:
+    - ./automation/scripts/p550-smoke-riscv64.sh 2>&1 | tee ${LOGFILE}
+  needs:
+    - *riscv64-test-needs
+    - debian-13-riscv64-gcc-debug
 
 adl-smoke-x86_64-gcc-debug:
   extends: .adl-x86_64
