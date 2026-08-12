@@ -85,7 +85,6 @@
 #define APLIC_TARGET_BASE               0x3004
 #define APLIC_TARGET_LAST               0x3ffc
 #define  APLIC_TARGET_HART_IDX          GENMASK(31, 18)
-#define  APLIC_TARGET_HART_IDX_SHIFT    18
 /* If target is in MSI delivery mode (domaincfg.DM = 1) */
 #define  APLIC_TARGET_GUEST_IDX         GENMASK(17, 12)
 /* Bit 11 is reserved and reads as zero */
@@ -101,6 +100,15 @@
 
 #define APLIC_SIZE(nr_cpus) \
     (APLIC_MIN_SIZE + APLIC_SIZE_ALIGN(APLIC_IDC_SIZE * (nr_cpus)))
+
+#define APLIC_xMSICFGADDR_PPN_SHIFT IMSIC_MMIO_PAGE_SHIFT
+
+#define APLIC_xMSICFGADDR_PPN_HHX_MASK(hhxw) (BIT(hhxw, UL) - 1)
+#define APLIC_xMSICFGADDR_PPN_HHX_SHIFT(hhxs) \
+    ((hhxs) + APLIC_xMSICFGADDR_PPN_SHIFT)
+
+#define APLIC_xMSICFGADDR_PPN_LHX_MASK(lhxw) (BIT(lhxw, UL) - 1)
+#define APLIC_xMSICFGADDR_PPN_LHX_SHIFT(lhxs) (lhxs)
 
 struct aplic_regs {
     uint32_t domaincfg;         /* 0x0000 */

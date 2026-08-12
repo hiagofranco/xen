@@ -41,6 +41,90 @@ static bool aplic_msi_mode(void)
     return readl(&aplic.regs->domaincfg) & APLIC_DOMAINCFG_DM;
 }
 
+/*
+ * The arrangement of IMSIC interrupt files in MMIO space follows a topology
+ * defined by the RISC-V AIA specification. An IMSIC group is a set of
+ * interrupt files (e.g., in a cluster or socket) co-located in memory.
+ *
+ * The physical address of an outgoing MSI is calculated by bitwise ORing a
+ * Base Physical Page Number (Base PPN) with the group number (g), the
+ * hart number relative to the group (h) and, for a supervisor-level
+ * interrupt domain, the Guest Index:
+ *
+ *   ( Base PPN | (g << (HHXS + 12)) | (h << LHXS) | Guest Index ) << 12
+ *
+ * where Base PPN, HHXS, LHXS, HHXW and LHXW come from the {m,s}msiaddrcfg[h]
+ * registers of the interrupt domain that sends the MSI:
+ *
+ * XLEN-1       HHXS+24          LHXS+12          12          0
+ * |            |                |                |           |
+ * ------------------------------------------------------------
+ * |xxxx|   g   |xxxxxxxx|   h   |xxxx|Guest Index|     0     |
+ * ------------------------------------------------------------
+ *
+ * - g: group number.
+ * - h: hart number relative to the group.
+ * - xxxx: remaining Base PPN bits; each gap may be zero-width.
+ * - Guest Index: selects one of the 4 KiB pages right above the hart's own
+ *   supervisor-level file, i.e. it starts at bit 12; LHXS must therefore be
+ *   at least as large as the number of guest index bits.
+ * - Bits 11:0: always zero because IMSIC files are 4 KiB page-aligned.
+ *
+ * For wired interrupts in MSI delivery mode (domaincfg.DM = 1), the APLIC
+ * computes the MSI target address itself from the "Hart Index" field
+ * (bits 31:18) of the corresponding target[i] register. This 14-bit field
+ * holds both g and h:
+ *
+ * 13          lhxw+hhxw   lhxw       0
+ * |           |           |          |
+ * ------------------------------------
+ * |     0     |     g     |    h     |
+ * ------------------------------------
+ *
+ * - lhxw (Low Hart Index Width): the number of bits used for the hart number
+ *   within a group.
+ * - hhxw (High Hart Index Width): the number of bits used for the group
+ *   number; the remaining bits of the field must be zero.
+ *
+ * The Guest Index isn't a part of it: for a supervisor-level interrupt domain
+ * it has its own field (bits 17:12) in target[i].
+ *
+ * Because there are "xxxx" gaps (Base PPN bits) between the indices in the
+ * physical address (depending on HHXS and LHXS), software must extract the
+ * group and hart components separately and pack them into the APLIC-defined
+ * Hart Index format to ensure correct MSI targeting.
+ */
+static unsigned long aplic_hart_index(unsigned int cpu)
+{
+    const struct imsic_config *imsic = imsic_get_config();
+    const struct imsic_msi *msi = &imsic->msi[cpu];
+    /* Low Hart Index Shift */
+    unsigned int lhxs = imsic->guest_index_bits;
+    /* Low Hart Index Width */
+    unsigned int lhxw = imsic->hart_index_bits;
+    /* High Hart Index Width */
+    unsigned int hhxw = imsic->group_index_bits;
+    /* High Hart Index Shift */
+    unsigned int hhxs =
+        imsic->group_index_shift - APLIC_xMSICFGADDR_PPN_SHIFT * 2;
+    /*
+     * msi->base_addr is the base of the MMIO regset this CPU's interrupt
+     * files live in, and one regset can cover several harts; msi->offset
+     * selects this CPU's block inside it. The hart index bits are part of
+     * that offset, so both indexes have to be derived from the full address.
+     */
+    paddr_t target_addr = msi->base_addr + msi->offset;
+    unsigned long tppn = target_addr >> APLIC_xMSICFGADDR_PPN_SHIFT;
+    unsigned long g =
+        (tppn >> APLIC_xMSICFGADDR_PPN_HHX_SHIFT(hhxs)) &
+        APLIC_xMSICFGADDR_PPN_HHX_MASK(hhxw);
+    unsigned long h =
+        (tppn >> APLIC_xMSICFGADDR_PPN_LHX_SHIFT(lhxs)) &
+        APLIC_xMSICFGADDR_PPN_LHX_MASK(lhxw);
+
+    return (g << lhxw) | h;
+}
+
 static void __init aplic_init_hw_interrupts(void)
 {
     unsigned int i;
@@ -207,10 +291,8 @@ static unsigned int aplic_get_cpu_from_mask(const cpumask_t *cpumask)
 
 static void cf_check aplic_set_irq_affinity(struct irq_desc *desc, const cpumask_t *mask)
 {
-    unsigned int cpu;
-    uint64_t group_index, base_ppn;
-    uint32_t hhxw, lhxw, hhxs, value;
-    const struct imsic_config *imsic = aplic.imsic_cfg;
+    unsigned int cpu = aplic_get_cpu_from_mask(mask);
+    uint32_t value;
 
     /*
      * TODO: Currently, APLIC is supported only with MSI interrupts.
@@ -223,27 +305,16 @@ static void cf_check aplic_set_irq_affinity(struct irq_desc *desc, const cpumask
 
     ASSERT(spin_is_locked(&desc->lock));
 
-    cpu = cpuid_to_hartid(aplic_get_cpu_from_mask(mask));
-    hhxw = imsic->group_index_bits;
-    lhxw = imsic->hart_index_bits;
     /*
-     * Although this variable is used only once in the calculation of
-     * group_index, and it might seem that hhxs could be defined as:
-     *   hhxs = imsic->group_index_shift - IMSIC_MMIO_PAGE_SHIFT;
-     * and then the addition of IMSIC_MMIO_PAGE_SHIFT could be omitted
-     * when calculating the group index.
-     * It was done intentionally this way to follow the formula from
-     * the AIA specification for calculating the MSI address.
+     * desc->irq is used as the EIID as-is, which is only valid for APLIC
+     * sources: they are numbered 1..num_irqs, with at most ARRAY_SIZE(target).
      */
-    hhxs = imsic->group_index_shift - IMSIC_MMIO_PAGE_SHIFT * 2;
-    base_ppn = imsic->msi[cpu].base_addr >> IMSIC_MMIO_PAGE_SHIFT;
+    BUILD_BUG_ON(ARRAY_SIZE(aplic.regs->target) >
+                 MASK_EXTR(~0U, APLIC_TARGET_EIID));
+    ASSERT(desc->irq && desc->irq <= aplic_info.num_irqs);
 
-    /* Update hart and EEID in the target register */
-    group_index = (base_ppn >> (hhxs + IMSIC_MMIO_PAGE_SHIFT)) &
-                  (BIT(hhxw, UL) - 1);
-    value = desc->irq;
-    value |= cpu << APLIC_TARGET_HART_IDX_SHIFT;
-    value |= group_index << (lhxw + APLIC_TARGET_HART_IDX_SHIFT);
+    value = MASK_INSR(aplic_hart_index(cpu), APLIC_TARGET_HART_IDX) |
+            desc->irq;
 
     spin_lock(&aplic.lock);
 
