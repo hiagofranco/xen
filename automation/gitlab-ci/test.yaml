@@ -169,7 +169,6 @@
     when: always
   rules:
     - if: $CI_JOB_NAME =~ $SELECTED_JOBS_ONLY && $MINERVASYS_JOBS == "true"
-          && $CI_COMMIT_REF_PROTECTED == "true"
       when: on_success
   tags:
     - minervasys
