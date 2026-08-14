@@ -329,6 +329,28 @@ int arch_domain_create(struct domain *d,
     return rc;
 }
 
+/*
+ * vsiselect is a per-hart CSR, but a guest changes it on its own: when V=1,
+ * VS-mode accesses to siselect are really accesses to vsiselect. Hence it is
+ * part of the vCPU context.
+ *
+ * When Smstateen is implemented, hstateen0.CSRIND (SMSTATEEN0_SVSLCT) gates
+ * that access, and a bit staying clear in v->arch.hstateen0 (see
+ * vcpu_csr_init()) means either that the guest was never given access to the
+ * CSR, and so can't have changed it, or that M-mode denied the state
+ * altogether, in which case the CSR can't be accessed from HS-mode either.
+ */
+static bool vcpu_can_access_vsiselect(const struct vcpu *v)
+{
+    if ( !riscv_isa_extension_available(NULL, RISCV_ISA_EXT_ssaia) )
+        return false;
+
+    if ( !riscv_isa_extension_available(NULL, RISCV_ISA_EXT_smstateen) )
+        return true;
+
+    return v->arch.hstateen0 & SMSTATEEN0_SVSLCT;
+}
+
 static void csrs_ctxt_switch_from(struct vcpu *p)
 {
     /*
@@ -347,6 +369,9 @@ static void csrs_ctxt_switch_from(struct vcpu *p)
     p->arch.vscause = csr_read(CSR_VSCAUSE);
     p->arch.vstval = csr_read(CSR_VSTVAL);
     p->arch.vsepc = csr_read(CSR_VSEPC);
+
+    if ( vcpu_can_access_vsiselect(p) )
+        p->arch.vsiselect = csr_read(CSR_VSISELECT);
 }
 
 static void csrs_ctxt_switch_to(struct vcpu *n)
@@ -368,6 +393,9 @@ static void csrs_ctxt_switch_to(struct vcpu *n)
     csr_write(CSR_VSCAUSE, n->arch.vscause);
     csr_write(CSR_VSTVAL, n->arch.vstval);
     csr_write(CSR_VSEPC, n->arch.vsepc);
+
+    if ( vcpu_can_access_vsiselect(n) )
+        csr_write(CSR_VSISELECT, n->arch.vsiselect);
 }
 
 static void ctxt_switch_from(struct vcpu *p)

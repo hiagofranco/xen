@@ -73,6 +73,7 @@ struct arch_vcpu {
     register_t vscause;
     register_t vsepc;
     uint64_t   vsie;
+    register_t vsiselect;
     register_t vsscratch;
     register_t vsstatus;
     register_t vstval;
