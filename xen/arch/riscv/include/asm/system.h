@@ -76,6 +76,9 @@ static inline bool local_irq_is_enabled(void)
 
 #define arch_fetch_and_add(x, v) __sync_fetch_and_add(x, v)
 
+struct vcpu * asmlinkage __context_switch(struct vcpu *prev,
+                                          const struct vcpu *next);
+
 #endif /* __ASSEMBLER__ */
 
 #endif /* RISCV_SYSTEM_H */

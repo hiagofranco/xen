@@ -11,6 +11,7 @@
 #include <asm/bitops.h>
 #include <asm/cpufeature.h>
 #include <asm/csr.h>
+#include <asm/current.h>
 #include <asm/intc.h>
 #include <asm/mmio.h>
 #include <asm/riscv_encoding.h>
@@ -151,6 +152,8 @@ int arch_vcpu_create(struct vcpu *v)
     /* Idle VCPUs don't need the rest of this setup */
     if ( is_idle_vcpu(v) )
         return 0;
+
+    v->arch.last_cpu = CPU_NONE;
 
     vcpu_csr_init(v);
 
@@ -324,6 +327,121 @@ int arch_domain_create(struct domain *d,
  fail:
     arch_domain_destroy(d);
     return rc;
+}
+
+static void csrs_ctxt_switch_from(struct vcpu *p)
+{
+    /*
+     * hedeleg, hideleg, henvcfg, hcounteren, htimedelta and hstateen0 aren't
+     * saved: neither the guest nor Xen changes them other than by
+     * csrs_ctxt_switch_to() writing them from v->arch.*, which is left
+     * unchanged after vcpu_csr_init().
+     */
+
+    p->arch.hvip = csr_read(CSR_HVIP);
+
+    p->arch.vsstatus = csr_read(CSR_VSSTATUS);
+    p->arch.vsie = csr_read64(VSIE);
+    p->arch.vstvec = csr_read(CSR_VSTVEC);
+    p->arch.vsscratch = csr_read(CSR_VSSCRATCH);
+    p->arch.vscause = csr_read(CSR_VSCAUSE);
+    p->arch.vstval = csr_read(CSR_VSTVAL);
+    p->arch.vsepc = csr_read(CSR_VSEPC);
+}
+
+static void csrs_ctxt_switch_to(struct vcpu *n)
+{
+    csr_write(CSR_HEDELEG, n->arch.hedeleg);
+    csr_write(CSR_HIDELEG, n->arch.hideleg);
+    csr_write(CSR_HVIP, n->arch.hvip);
+    csr_write64(HENVCFG, n->arch.henvcfg);
+    csr_write(CSR_HCOUNTEREN, n->arch.hcounteren);
+    csr_write64(HTIMEDELTA, n->arch.htimedelta);
+
+    if ( riscv_isa_extension_available(NULL, RISCV_ISA_EXT_smstateen) )
+        csr_write(CSR_HSTATEEN0, n->arch.hstateen0);
+
+    csr_write(CSR_VSSTATUS, n->arch.vsstatus);
+    csr_write64(VSIE, n->arch.vsie);
+    csr_write(CSR_VSTVEC, n->arch.vstvec);
+    csr_write(CSR_VSSCRATCH, n->arch.vsscratch);
+    csr_write(CSR_VSCAUSE, n->arch.vscause);
+    csr_write(CSR_VSTVAL, n->arch.vstval);
+    csr_write(CSR_VSEPC, n->arch.vsepc);
+}
+
+static void ctxt_switch_from(struct vcpu *p)
+{
+    /*
+     * When the idle VCPU is running, Xen will always stay in hypervisor
+     * mode.
+     * Therefore we don't need to save the context of an idle VCPU.
+     */
+    if ( is_idle_vcpu(p) )
+        return;
+
+    p2m_ctxt_switch_from(p);
+
+    vtimer_ctxt_switch_from(p);
+
+    csrs_ctxt_switch_from(p);
+}
+
+static void ctxt_switch_to(struct vcpu *n)
+{
+    /*
+     * When the idle VCPU is running, Xen will always stay in hypervisor
+     * mode.
+     * Therefore we don't need to restore the context of an idle VCPU.
+     */
+    if ( is_idle_vcpu(n) )
+        return;
+
+    csrs_ctxt_switch_to(n);
+
+    vtimer_ctxt_switch_to(n);
+
+    p2m_ctxt_switch_to(n);
+}
+
+static void schedule_tail(struct vcpu *prev)
+{
+    unsigned int cpu = smp_processor_id();
+
+    ASSERT(prev != current);
+
+    ctxt_switch_from(prev);
+
+    write_atomic(&prev->dirty_cpu, VCPU_CPU_CLEAN);
+
+    ctxt_switch_to(current);
+
+    write_atomic(&current->dirty_cpu, cpu);
+
+    current->arch.last_cpu = cpu;
+
+    /*
+     * sched_context_switched() internally uses a spinlock,
+     * which requires interrupts to be enabled.
+     */
+    local_irq_enable();
+
+    sched_context_switched(prev, current);
+}
+
+void context_switch(struct vcpu *prev, struct vcpu *next)
+{
+    ASSERT(local_irq_is_enabled());
+    ASSERT(prev != next);
+    ASSERT(!vcpu_cpu_dirty(next));
+
+    local_irq_disable();
+
+    set_current(next);
+
+    prev = __context_switch(prev, next);
+
+    schedule_tail(prev);
 }
 
 static void __init __maybe_unused build_assertions(void)

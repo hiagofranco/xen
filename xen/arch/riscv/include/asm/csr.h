@@ -40,6 +40,13 @@
     csr_write(CSR_ ## name ## H, v_ >> 32); \
 })
 
+#define csr_read64(name)                       \
+({                                             \
+    uint64_t v_ = csr_read(CSR_ ## name ## H); \
+                                               \
+    (v_ << 32) | csr_read(CSR_ ## name);       \
+})
+
 /*
  * The two halves are read by separate instructions, so a CSR which hardware
  * increments can carry from the low half into the high one in between,
@@ -63,6 +70,8 @@
 #define csr_write64(name, val) csr_write(CSR_ ## name, val)
 
 #define csr_volatile_read64(name) csr_read(CSR_ ## name)
+
+#define csr_read64(name) csr_read(CSR_ ## name)
 #endif
 
 #define csr_swap(csr, val)                                      \

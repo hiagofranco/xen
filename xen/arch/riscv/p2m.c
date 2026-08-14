@@ -243,6 +243,15 @@ static void p2m_tlb_flush(struct p2m_domain *p2m)
 
     p2m->need_flush = false;
 
+    /*
+     * Order the p2m updates above against the read of dirty_cpumask below,
+     * pairing with the barrier in p2m_vmid_switch_to(). Either that hart is
+     * seen here and gets an HFENCE.GVMA, or it adds itself to the mask
+     * afterwards, in which case it starts walking this p2m only once the
+     * updates are visible to it.
+     */
+    smp_mb();
+
     sbi_remote_hfence_gvma(d->dirty_cpumask, 0, 0);
 }
 
@@ -1497,14 +1506,108 @@ void p2m_ctxt_switch_from(struct vcpu *p)
      * VMID, world-switch code should zero vsatp, then swap hgatp, then
      * finally write the new vsatp value what will be done in
      * p2m_ctxt_switch_to().
-     * Note, that also HGATP update could happen in p2m_handle_vmenter().
      */
     p->arch.vsatp = csr_swap(CSR_VSATP, 0);
 
     /*
-     * Nothing to do with HGATP as it will be update in p2m_ctxt_switch_to()
-     * or/and in p2m_handle_vmenter().
+     * Nothing to do with HGATP as it will be updated in
+     * p2m_ctxt_switch_to().
      */
+}
+
+/*
+ * Domain whose p2m this hart's HGATP points at. ctxt_switch_to() bails out
+ * early for the idle vCPU, so HGATP survives a pass through idle and keeps
+ * pointing at the domain which ran here last. That domain, rather than the
+ * one the scheduler switched away from, is what owns this hart's G-stage
+ * translations. The hart also keeps its place in the owner's dirty_cpumask:
+ * p2m_tlb_flush() goes on reaching it, and a domain which idles between two
+ * runs on the same hart keeps its VMIDs.
+ *
+ * TODO: nothing resets hgatp_owner when its domain is destroyed, so a hart
+ *       which stays idle from the domain's last run until it is freed is
+ *       left with a dangling pointer. Once domain_relinquish_resources()
+ *       tears down the p2m, it has to reset hgatp_owner of every hart still
+ *       pointing at the domain (cmpxchg() against d), i.e. before the RCU
+ *       grace period of domain_destroy() and so before the domain is freed.
+ */
+static DEFINE_PER_CPU(struct domain *, hgatp_owner);
+
+/*
+ * Update this hart's place in the dirty_cpumask of the domains involved and
+ * claim a VMID for n. Must be called before HGATP is pointed at n's p2m, as
+ * it is written with the VMID claimed here.
+ */
+static void p2m_vmid_switch_to(struct vcpu *n)
+{
+    unsigned int cpu = smp_processor_id();
+    struct domain *owner = this_cpu(hgatp_owner);
+    bool need_flush;
+
+    ASSERT(!is_idle_vcpu(n));
+
+    if ( owner != n->domain )
+    {
+        /*
+         * Once this hart drops out of the owner's dirty_cpumask it stops
+         * being a target of p2m_tlb_flush(), while its TLB may still hold
+         * G-stage translations of that domain: none of the vCPUs of that
+         * domain which ran here has had its VMID invalidated. Move the hart
+         * to a new VMID generation so that none of them can be reached
+         * again.
+         *
+         * This has to precede the VMID claim below, so that n gets a VMID of
+         * the new generation.
+         */
+        if ( owner )
+        {
+            vmid_flush_hart();
+
+            cpumask_clear_cpu(cpu, owner->dirty_cpumask);
+        }
+
+        /*
+         * Mark this hart in the incoming domain's dirty_cpumask before HGATP
+         * is pointed at its p2m: from that write on the hart may cache the
+         * p2m's translations, so p2m_tlb_flush() must already reach it.
+         */
+        cpumask_set_cpu(cpu, n->domain->dirty_cpumask);
+
+        /*
+         * Pairs with the barrier in p2m_tlb_flush(). cpumask_set_cpu() is an
+         * unordered AMO on RISC-V, so without this a concurrent flusher could
+         * read the mask without this hart in it while this hart is already
+         * walking the p2m it is about to be pointed at.
+         */
+        smp_mb();
+
+        this_cpu(hgatp_owner) = n->domain;
+    }
+
+    /*
+     * VMIDs and generations are per hart, so a pair issued on another hart
+     * may match this hart's generation by coincidence. Reset the generation
+     * to 0, which no hart ever uses, so that a fresh VMID is claimed from
+     * this hart's pool.
+     */
+    if ( n->arch.last_cpu != cpu )
+        vmid_flush_vcpu(n);
+
+    /*
+     * Claim the VMID before the caller writes HGATP rather than on guest
+     * entry: from that write on, speculation may fill the TLB with this
+     * domain's G-stage entries tagged with that VMID. A stale VMID may
+     * already have been re-issued to a vCPU of another domain, which would
+     * then hit these entries.
+     */
+    need_flush = vmid_handle_vmenter(&n->arch.vmid);
+
+    /*
+     * A VMID isn't re-used until the generation it was issued in wraps, so a
+     * G-stage flush is needed only when vmid_handle_vmenter() says so.
+     */
+    if ( unlikely(need_flush) )
+        local_hfence_gvma_all();
 }
 
 /*
@@ -1521,11 +1624,9 @@ void p2m_ctxt_switch_to(struct vcpu *n)
     if ( is_idle_vcpu(n) )
         return;
 
+    p2m_vmid_switch_to(n);
+
     csr_write(CSR_HGATP, construct_hgatp(p2m, n->arch.vmid.vmid));
-    /*
-     * As VMID is unique per vCPU and just re-used here thereby there is no
-     * need for G-stage TLB flush here.
-     */
 
     csr_write(CSR_VSATP, n->arch.vsatp);
 
@@ -1539,48 +1640,6 @@ void p2m_ctxt_switch_to(struct vcpu *n)
      *       conditional.
      */
     flush_tlb_guest_local();
-}
-
-void p2m_handle_vmenter(void)
-{
-    struct vcpu *curr = current;
-    struct p2m_domain *p2m = p2m_get_hostp2m(curr->domain);
-    struct vcpu_vmid *p_vmid = &curr->arch.vmid;
-    unsigned short old_vmid, new_vmid;
-    bool need_flush;
-
-    BUG_ON(is_idle_vcpu(curr));
-
-    old_vmid = p_vmid->vmid;
-    need_flush = vmid_handle_vmenter(p_vmid);
-    new_vmid = p_vmid->vmid;
-
-#ifdef P2M_DEBUG
-    printk("%pv: oldvmid(%d) new_vmid(%d), need_flush(%d)\n",
-           curr, old_vmid, new_vmid, need_flush);
-#endif
-
-    /*
-     * There is no need to set VSATP to 0 to stop speculation before updating
-     * HGATP, as VSATP is not modified here.
-     */
-    if ( old_vmid != new_vmid )
-        csr_write(CSR_HGATP, construct_hgatp(p2m, p_vmid->vmid));
-
-    /*
-     * There is also no need to flush G-stage TLB unconditionally as old VMID
-     * won't be reused until need_flush is set to true.
-     */
-    if ( unlikely(need_flush) )
-        local_hfence_gvma_all();
-
-    /*
-     * There is also no need to flush the VS-stage TLB: even if speculation
-     * occurs (VSATP + old HGATP were used), it will use the old VMID, which
-     * won't be reused until need_flush is set to true. When VMIDs aren't
-     * available there is no old VMID to rely on, but then need_flush is set
-     * on every entry, so the flush above covers that case.
-     */
 }
 
 struct page_info *get_page_from_gfn(struct domain *d, unsigned long gfn,

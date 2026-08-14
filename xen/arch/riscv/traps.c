@@ -178,8 +178,6 @@ static void check_for_pcpu_work(void)
     vcpu_sync_interrupts(curr);
 
     vcpu_flush_interrupts(curr);
-
-    p2m_handle_vmenter();
 }
 
 static void timer_interrupt(void)
