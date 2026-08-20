@@ -310,5 +310,53 @@ enum mc_disposition arch_do_multicall_call(struct mc_state *state)
 
 void trap_redirect(const struct trap_info *trap)
 {
-    BUG_ON("unimplemented");
+    struct cpu_user_regs *regs = vcpu_guest_cpu_user_regs(current);
+    unsigned long vsstatus = csr_read(CSR_VSSTATUS);
+
+    /*
+     * Redirecting a trap makes sense only if the trap was taken from
+     * virtualized mode, i.e. sret is going to return to VS-mode.
+     */
+    ASSERT(regs->hstatus & HSTATUS_SPV);
+
+    /*
+     * Only synchronous exceptions can be redirected. Interrupts must be
+     * injected via hvip instead, so that the hardware itself performs
+     * VS-mode trap entry, respecting vsstatus.SIE and the vectored
+     * dispatch (BASE + 4 * cause) if vstvec is configured so.
+     */
+    ASSERT(!(trap->scause & CAUSE_IRQ_FLAG));
+
+    /* Change Guest SSTATUS.SPP bit */
+    vsstatus &= ~SSTATUS_SPP;
+    if ( regs->sstatus & SSTATUS_SPP )
+        vsstatus |= SSTATUS_SPP;
+
+    /* Change Guest SSTATUS.SPIE bit */
+    vsstatus &= ~SSTATUS_SPIE;
+    if ( vsstatus & SSTATUS_SIE )
+        vsstatus |= SSTATUS_SPIE;
+
+    /* Clear Guest SSTATUS.SIE bit */
+    vsstatus &= ~SSTATUS_SIE;
+
+    /* Update Guest SSTATUS */
+    csr_write(CSR_VSSTATUS, vsstatus);
+
+    /* Update Guest SCAUSE, STVAL, and SEPC */
+    csr_write(CSR_VSCAUSE, trap->scause);
+    csr_write(CSR_VSTVAL, trap->stval);
+    csr_write(CSR_VSEPC, trap->sepc);
+
+    /*
+     * Set Guest PC to Guest exception vector.
+     *
+     * vstvec's MODE field is not part of the address. Exceptions always
+     * target BASE regardless of MODE, so mask it off explicitly instead of
+     * relying on the hardwired zero bit of sepc to drop it.
+     */
+    regs->sepc = csr_read(CSR_VSTVEC) & ~STVEC_MODE_MASK;
+
+    /* Set Guest privilege mode to supervisor */
+    regs->sstatus |= SSTATUS_SPP;
 }

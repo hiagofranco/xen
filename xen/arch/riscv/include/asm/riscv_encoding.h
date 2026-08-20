@@ -107,6 +107,11 @@
 #define SIP_SSIP			MIP_SSIP
 #define SIP_STIP			MIP_STIP
 
+/* stvec/vstvec: MODE is bits [1:0], BASE is bits [XLEN-1:2] */
+#define STVEC_MODE_MASK			_UL(0x3)
+#define STVEC_MODE_DIRECT		_UL(0x0)
+#define STVEC_MODE_VECTORED		_UL(0x1)
+
 #define PRV_U				_UL(0)
 #define PRV_S				_UL(1)
 #define PRV_M				_UL(3)
