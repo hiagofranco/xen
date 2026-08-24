@@ -6,6 +6,7 @@ obj-y += domain.o
 obj-y += domain-build.init.o
 obj-$(CONFIG_DOM0LESS_BOOT) += dom0less-build.init.o
 obj-$(CONFIG_EARLY_PRINTK) += early_printk.o
+obj-y += emulate.o
 obj-y += entry.o
 obj-y += extable.o
 obj-y += guestcopy.o

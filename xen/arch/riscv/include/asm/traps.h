@@ -17,6 +17,9 @@ void do_trap(struct cpu_user_regs *cpu_regs);
 void handle_trap(void);
 void trap_init(void);
 
+/* Reflect @trap back to the guest, i.e. enter its VS-mode trap handler. */
+void trap_redirect(const struct trap_info *trap);
+
 #endif /* __ASSEMBLER__ */
 
 #endif /* RISCV_TRAPS_H */

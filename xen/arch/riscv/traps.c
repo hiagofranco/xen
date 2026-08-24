@@ -14,6 +14,7 @@
 
 #include <asm/extable.h>
 #include <asm/cpufeature.h>
+#include <asm/emulate.h>
 #include <asm/intc.h>
 #include <asm/processor.h>
 #include <asm/riscv_encoding.h>
@@ -225,6 +226,18 @@ void do_trap(struct cpu_user_regs *cpu_regs)
         vsbi_handle_ecall(cpu_regs);
         break;
 
+    case CAUSE_FETCH_GUEST_PAGE_FAULT:
+    case CAUSE_LOAD_GUEST_PAGE_FAULT:
+    case CAUSE_STORE_GUEST_PAGE_FAULT:
+        /*
+         * Xen doesn't access guest memory, so it can't take a guest page
+         * fault itself: only a guest can get here.
+         */
+        BUG_ON(!from_guest);
+
+        handle_guest_page_fault(cpu_regs, cause);
+        break;
+
     case CAUSE_ILLEGAL_INSTRUCTION:
         if ( do_bug_frame(cpu_regs, pc) >= 0 )
         {
@@ -293,4 +306,9 @@ enum mc_disposition arch_do_multicall_call(struct mc_state *state)
 {
     BUG_ON("unimplemented");
     return mc_continue;
+}
+
+void trap_redirect(const struct trap_info *trap)
+{
+    BUG_ON("unimplemented");
 }
