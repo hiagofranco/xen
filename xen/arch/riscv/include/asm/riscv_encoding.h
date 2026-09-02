@@ -69,13 +69,13 @@
  * Width encoded by the MXL, SXL, UXL and VSXL fields, all of which share one
  * encoding. 0 is reserved.
  */
+#define XLEN_FIELD_RESERVED		_UL(0)
 #define XLEN_FIELD_32			_UL(1)
 #define XLEN_FIELD_64			_UL(2)
 #define XLEN_FIELD_128			_UL(3)
 
 #if __riscv_xlen == 64
 #define HSTATUS_VSXL			_UL(0x300000000)
-#define HSTATUS_VSXL_SHIFT		32
 #endif
 #define HSTATUS_VTSR			_UL(0x00400000)
 #define HSTATUS_VTW			_UL(0x00200000)

@@ -51,6 +51,121 @@ static struct csr_masks __ro_after_init csr_masks;
 #define HENVCFG_VALID_MASK 0xe0000003000000ffUL
 #define HSTATEEN0_VALID_MASK 0xde00000000000007UL
 
+/*
+ * Return the hstatus.VSXL value encoding the guest's XLEN. Whether the
+ * hardware can actually provide that width is a separate question, answered
+ * by hstatus_vsxl_settable().
+ */
+unsigned int domain_vsxl(const struct domain *d)
+{
+    switch ( d->type )
+    {
+    case DOMAIN_32BIT:
+        return XLEN_FIELD_32;
+
+    case DOMAIN_64BIT:
+        return XLEN_FIELD_64;
+
+    /*
+     * No default case: -Wswitch then fails the build should a new
+     * domain_type (a 128-bit one, in particular) be added without
+     * updating this mapping.
+     */
+    }
+
+    ASSERT_UNREACHABLE();
+
+    /* Never accepted by hstatus_vsxl_settable(). */
+    return XLEN_FIELD_RESERVED;
+}
+
+#ifdef CONFIG_RISCV_32
+
+/*
+ * hstatus.VSXL occupies bits 33:32 and hence does not exist when HSXLEN=32.
+ * VSXLEN is then always 32, so there is nothing to probe and no width other
+ * than 32 to accept.
+ */
+void __init init_hstatus_vsxl_settable_mask(void)
+{
+}
+
+bool hstatus_vsxl_settable(unsigned int vsxl)
+{
+    return vsxl == XLEN_FIELD_32;
+}
+
+static void vcpu_set_vsxl(struct vcpu *v)
+{
+    ASSERT(is_32bit_domain(v->domain));
+}
+
+#else /* CONFIG_RISCV_64 */
+
+/*
+ * Bitmap of the hstatus.VSXL values this hardware accepts, indexed by field
+ * value. Not one of csr_masks: those are bit masks ANDed into a CSR write,
+ * this is a set of legal values of a single WARL field.
+ */
+static unsigned int __ro_after_init hstatus_vsxl_settable_mask;
+
+/*
+ * hstatus.VSXL is WARL and, in particular, an implementation is permitted to
+ * make it read-only with a value that always keeps VSXLEN == HSXLEN. Probe
+ * once which values can really be set, so that a domain whose width the
+ * hardware cannot provide is refused rather than silently run at the wrong
+ * XLEN.
+ *
+ * Every encoding the field can hold is probed, XLEN_FIELD_128 included, so
+ * that a guest width added later needs no change here.
+ *
+ * Like the CSR masks below this assumes all harts behave the same way.
+ */
+void __init init_hstatus_vsxl_settable_mask(void)
+{
+    register_t hstatus = csr_read(CSR_HSTATUS);
+
+    /* Encoding 0 is reserved, hence starting at the narrowest width. */
+    for ( unsigned int vsxl = XLEN_FIELD_32; vsxl <= XLEN_FIELD_128; vsxl++ )
+    {
+        register_t test = (hstatus & ~HSTATUS_VSXL) |
+                          MASK_INSR(vsxl, HSTATUS_VSXL);
+
+        csr_write(CSR_HSTATUS, test);
+
+        if ( MASK_EXTR(csr_read(CSR_HSTATUS), HSTATUS_VSXL) == vsxl )
+            hstatus_vsxl_settable_mask |= BIT(vsxl, U);
+    }
+
+    csr_write(CSR_HSTATUS, hstatus);
+}
+
+/*
+ * Whether the hardware really accepts the given hstatus.VSXL value, i.e.
+ * whether a guest of that XLEN can be run at all.
+ */
+bool hstatus_vsxl_settable(unsigned int vsxl)
+{
+    return hstatus_vsxl_settable_mask & BIT(vsxl, U);
+}
+
+/*
+ * Set the guest's XLEN explicitly rather than leaving it to the WARL
+ * behaviour of hstatus.VSXL.
+ */
+static void vcpu_set_vsxl(struct vcpu *v)
+{
+    struct cpu_user_regs *regs = vcpu_guest_cpu_user_regs(v);
+    unsigned int vsxl = domain_vsxl(v->domain);
+
+    ASSERT(hstatus_vsxl_settable(vsxl));
+
+    regs->hstatus = (regs->hstatus & ~HSTATUS_VSXL) |
+                    MASK_INSR(vsxl, HSTATUS_VSXL);
+}
+
+#endif /* CONFIG_RISCV_32 */
+
 void __init init_csr_masks(void)
 {
     /*
@@ -91,6 +206,11 @@ static void vcpu_csr_init(struct vcpu *v)
 {
     v->arch.hedeleg = HEDELEG_DEFAULT & csr_masks.hedeleg;
 
+    /*
+     * hstatus.VSXL is left zero here: vCPU0 is created before
+     * kernel_probe() reads the guest kernel header, so the domain's type,
+     * and hence the guest's XLEN, is not known yet.
+     */
     vcpu_guest_cpu_user_regs(v)->hstatus = HSTATUS_SPV | HSTATUS_SPVP;
 
     v->arch.hideleg = HIDELEG_DEFAULT & csr_masks.hideleg;
@@ -134,6 +254,9 @@ static void vcpu_csr_init(struct vcpu *v)
 
 static void continue_new_vcpu(struct vcpu *prev)
 {
+    /* Avoid an unused-function error until this function is implemented. */
+    (void)vcpu_set_vsxl;
+
     BUG_ON("unimplemented\n");
 }
 

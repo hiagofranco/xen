@@ -144,6 +144,9 @@ int vcpu_unset_interrupt(struct vcpu *v, unsigned int irq);
 void vcpu_sync_interrupts(struct vcpu *curr);
 void vcpu_flush_interrupts(struct vcpu *curr);
 
+bool hstatus_vsxl_settable(unsigned int vsxl);
+unsigned int domain_vsxl(const struct domain *d);
+
 #endif /* RISCV_DOMAIN_H */
 
 /*

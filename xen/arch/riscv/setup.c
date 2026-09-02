@@ -149,6 +149,8 @@ void __init noreturn start_xen(unsigned long bootcpu_id,
 
     init_csr_masks();
 
+    init_hstatus_vsxl_settable_mask();
+
     preinit_xen_time();
 
     intc_preinit();

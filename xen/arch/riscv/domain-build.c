@@ -15,8 +15,16 @@ int __init construct_domain(struct domain *d, struct kernel_info *kinfo)
 {
     struct vcpu *v = d->vcpu[0];
     struct cpu_user_regs *regs = vcpu_guest_cpu_user_regs(v);
+    unsigned int vsxl = domain_vsxl(d);
 
     BUG_ON(v->is_initialised);
+
+    /* Refuse the domain before any of its images are loaded. */
+    if ( !hstatus_vsxl_settable(vsxl) )
+    {
+        printk(XENLOG_ERR "%pd: hstatus.VSXL cannot be set to %u\n", d, vsxl);
+        return -EOPNOTSUPP;
+    }
 
     /*
      * At the moment *_load() don't return value and will just panic()

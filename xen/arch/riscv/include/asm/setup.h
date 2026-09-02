@@ -11,6 +11,8 @@ void copy_from_paddr(void *dst, paddr_t paddr, unsigned long len);
 
 void init_csr_masks(void);
 
+void init_hstatus_vsxl_settable_mask(void);
+
 #endif /* RISCV_SETUP_H */
 
 /*
