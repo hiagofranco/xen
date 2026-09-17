@@ -35,6 +35,8 @@ static inline unsigned int smp_processor_id(void)
 {
     unsigned int id = tp->processor_id;
 
+    /* An entry whose processor_id isn't valid yet holds CPU_NONE. */
+    BUILD_BUG_ON(CPU_NONE < NR_CPUS);
     BUG_ON(id >= NR_CPUS);
 
     return id;

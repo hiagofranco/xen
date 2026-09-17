@@ -71,7 +71,7 @@ struct vimsic_state {
      */
     unsigned int guest_file_id;
     /*
-     * s/w IMSIC VS-file -> vsfile_cpu == NR_CPUS
+     * s/w IMSIC VS-file -> vsfile_cpu == CPU_NONE
      * h/w IMSIC VS-file -> vsfile_cpu < NR_CPUS
      */
     unsigned int vsfile_cpu;

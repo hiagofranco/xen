@@ -9,10 +9,10 @@
  * tp points to one of these per cpu.
  *
  * hart_id would be valid (no matter which value) if its
- * processor_id field is valid (less than NR_CPUS).
+ * processor_id field is valid (not CPU_NONE).
  */
 struct pcpu_info pcpu_info[NR_CPUS] = { [0 ... NR_CPUS - 1] = {
-    .processor_id = NR_CPUS,
+    .processor_id = CPU_NONE,
 }};
 
 void smp_send_event_check_mask(const cpumask_t *mask)

@@ -28,7 +28,7 @@ static inline unsigned int hartid_to_cpuid(unsigned long hartid)
     }
 
     /* hartid isn't valid for some reason */
-    return NR_CPUS;
+    return CPU_NONE;
 }
 
 static inline void set_cpuid_to_hartid(unsigned long cpuid,

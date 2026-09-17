@@ -136,6 +136,9 @@
 #define OPT_CONSOLE_STR "dtuart"
 #define INVALID_VCPU_ID MAX_VIRT_CPUS
 
+/* A CPU number which doesn't identify any physical CPU. */
+#define CPU_NONE (~0U)
+
 /* Linkage for RISCV */
 #ifdef __ASSEMBLER__
 #define CODE_FILL /* empty */

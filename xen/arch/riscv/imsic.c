@@ -357,9 +357,9 @@ int cf_check vcpu_imsic_init(struct vcpu *v)
     /*
      * xvzalloc() already cleared the context, so guest_file_id == 0, i.e. the
      * always-available s/w IMSIC VS-file. Only vsfile_cpu needs an explicit
-     * initializer as its s/w VS-file value is NR_CPUS rather than 0.
+     * initializer as its s/w VS-file value is CPU_NONE rather than 0.
      */
-    imsic_state->vsfile_cpu = NR_CPUS;
+    imsic_state->vsfile_cpu = CPU_NONE;
 
     v->arch.vimsic_state = imsic_state;
 
@@ -465,7 +465,7 @@ int __init imsic_init(const struct dt_device_node *node)
         }
 
         /*
-         * hartid_to_cpuid() returns NR_CPUS for a hart Xen doesn't know, so
+         * hartid_to_cpuid() returns CPU_NONE for a hart Xen doesn't know, so
          * the range has to be checked before msi[] is indexed at all.
          */
         cpu = hartid_to_cpuid(hartid);
