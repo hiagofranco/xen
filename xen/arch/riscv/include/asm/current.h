@@ -16,6 +16,18 @@ register struct pcpu_info *tp asm ( "tp" );
 struct pcpu_info {
     unsigned int processor_id; /* Xen CPU id */
     unsigned long hart_id; /* physical CPU id */
+
+    /*
+     * struct cpu_info of the vCPU currently running on this hart, the idle
+     * vCPU included. It occupies the topmost sizeof(struct cpu_info) bytes
+     * of that vCPU's stack, and so is also the stack pointer Xen starts
+     * from when a trap is taken from a guest.
+     *
+     * Kept in sync with current->arch.cpu_info by set_current().
+     */
+    struct cpu_info *curr_cpu_info;
+
+    unsigned long tmp;
 } __cacheline_aligned;
 
 /* tp points to one of these */
@@ -46,10 +58,25 @@ static inline unsigned int smp_processor_id(void)
 DECLARE_PER_CPU(struct vcpu *, curr_vcpu);
 
 #define current            this_cpu(curr_vcpu)
-#define set_current(vcpu)  do { current = (vcpu); } while (0)
 #define get_cpu_current(cpu)  per_cpu(curr_vcpu, cpu)
 
-#define get_cpu_info() (current->arch.cpu_info)
+/*
+ * curr_cpu_info has to be updated together with current: get_cpu_info()
+ * reads the former, and handle_trap() uses it to find the stack to switch
+ * to when a trap comes in from a guest, so the two must never disagree.
+ */
+#define set_current(v)                          \
+    do {                                        \
+        struct vcpu *v_ = (v);                  \
+                                                \
+        current = v_;                           \
+        tp->curr_cpu_info = v_->arch.cpu_info;  \
+    } while ( 0 )
+
+static inline struct cpu_info *get_cpu_info(void)
+{
+    return tp->curr_cpu_info;
+}
 
 #define guest_cpu_user_regs() ({ BUG_ON("unimplemented"); NULL; })
 #define vcpu_guest_cpu_user_regs(vcpu) \
