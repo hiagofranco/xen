@@ -54,6 +54,8 @@ void asm_offsets(void)
     OFFSET(CPU_USER_REGS_HSTATUS, struct cpu_user_regs, hstatus);
     BLANK();
     DEFINE(PCPU_INFO_SIZE, sizeof(struct pcpu_info));
+    OFFSET(PCPU_INFO_TMP, struct pcpu_info, tmp);
+    OFFSET(PCPU_INFO_CURR_CPU_INFO, struct pcpu_info, curr_cpu_info);
     BLANK();
     OFFSET(VCPU_XEN_SAVED_CONTEXT_S0, struct vcpu, arch.xen_saved_context.s0);
     OFFSET(VCPU_XEN_SAVED_CONTEXT_S1, struct vcpu, arch.xen_saved_context.s1);
