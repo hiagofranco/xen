@@ -565,7 +565,9 @@ int cf_check vcpu_imsic_init(struct vcpu *v)
 
 /*
  * Arguments of the imsic_vsfile_local_*() helpers, which work on a guest
- * interrupt file of the pCPU they run on.
+ * interrupt file of the pCPU they run on. Those run on another pCPU go
+ * through imsic_call_on_cpu(), which passes a single pointer, hence the
+ * arguments are bundled.
  */
 struct imsic_vsfile_data {
     /* Guest interrupt file to work on, i.e. the hstatus.VGEIN selecting it. */
@@ -606,6 +608,33 @@ static void imsic_vsfile_deselect(const struct imsic_vsfile_ctx *ctx)
 }
 
 /*
+ * Execute func() on the pCPU which owns the IMSIC interrupt file func() is
+ * going to work with.
+ *
+ * An IMSIC VS-file is reachable only through hstatus.VGEIN of the hart the
+ * file belongs to, and a guest interrupt file index is meaningless on any
+ * other hart, so such work always has to be done by that very hart.
+ *
+ * The local case runs with IRQs disabled to provide func() with the same
+ * environment it is given when it is called from the function call IPI
+ * handler.
+ */
+static void imsic_call_on_cpu(unsigned int cpu, void (*func)(void *),
+                              struct imsic_vsfile_data *data)
+{
+    if ( cpu == smp_processor_id() )
+    {
+        unsigned long flags;
+
+        local_irq_save(flags);
+        func(data);
+        local_irq_restore(flags);
+    }
+    else
+        on_selected_cpus(cpumask_of(cpu), func, data, 1);
+}
+
+/*
  * Ensure that all the MSIs the APLIC has already generated for the hart this
  * runs on have really reached the hart's IMSIC.
  *
@@ -616,7 +645,7 @@ static void imsic_vsfile_deselect(const struct imsic_vsfile_ctx *ctx)
  * any other hart, it has to be executed by the pCPU owning the interrupt file
  * the MSIs were being sent to.
  */
-static void __maybe_unused imsic_aplic_sync(void *unused)
+static void cf_check imsic_aplic_sync(void *unused)
 {
     imsic_local_eix_update(imsic_sync_id(&imsic_cfg), 1, true, false);
 
@@ -1077,7 +1106,8 @@ void imsic_vsfile_attach(struct vcpu *v)
  * A vCPU without a h/w file has none to move.
  *
  * No lock is needed: vsfile_cpu of a running vCPU is changed only by the vCPU
- * itself, when it acquires a file in imsic_vsfile_attach().
+ * itself, when it acquires a file in imsic_vsfile_attach() or
+ * imsic_migrate_vcpu().
  *
  * TODO: a s/w file, once supported, has to be moved too.
  */
@@ -1091,6 +1121,63 @@ static bool imsic_vsfile_needs_move(const struct vcpu *v)
 }
 
 /*
+ * Move the h/w guest interrupt file of @v to the pCPU @v runs on, following
+ * "Migrating a virtual hart to a different guest interrupt file" in the AIA
+ * spec. Only called by imsic_migrate_vcpu(), see the requirements there.
+ */
+static void imsic_vsfile_move(struct vcpu *v)
+{
+    struct imsic_vsfile_data vsfile_data = {
+        .nr_eix = imsic_cfg.nr_eix,
+    };
+    struct vimsic_state *imsic_state = v->arch.vimsic_state;
+    unsigned long flags;
+    unsigned int old_vsfile_id;
+    unsigned int old_vsfile_cpu;
+
+    ASSERT(local_irq_is_enabled());
+    ASSERT(imsic_vsfile_needs_move(v));
+
+    read_lock_irqsave(&imsic_state->vsfile_lock, flags);
+    old_vsfile_id = imsic_state->guest_file_id;
+    old_vsfile_cpu = imsic_state->vsfile_cpu;
+    read_unlock_irqrestore(&imsic_state->vsfile_lock, flags);
+
+    /*
+     * At this point, all interrupt producers are still using the old IMSIC
+     * VS-file. Allocate and clear the new one before redirecting anything
+     * to it.
+     */
+
+    /* Zero-out, map and start to use the new IMSIC VS-file */
+    vsfile_data.hgei = imsic_vsfile_acquire(v);
+    if ( !vsfile_data.hgei )
+        return;
+
+    /*
+     * If any interrupts at an APLIC are forwarded by MSIs to the old interrupt
+     * file, reconfigure the APLIC to send them to the new interrupt file.
+     */
+    vaplic_reconfigure_target(v);
+
+    /*
+     * Synchronizing interactions between a hart and the APLIC.
+     *
+     * The MSIs to be flushed are the ones still on their way to the old
+     * interrupt file, so the barrier has to be done by the pCPU which owns
+     * that file.
+     */
+    imsic_call_on_cpu(old_vsfile_cpu, imsic_aplic_sync, NULL);
+
+    /*
+     * At this point, all interrupt producers have been moved
+     * to the new IMSIC VS-file.
+     */
+
+    BUG_ON("unimplemented");
+}
+
+/*
  * Make the h/w guest interrupt file of @v belong to the pCPU @v runs on.
  *
  * Has to be called by @v itself (see the ASSERT() below), right before it
@@ -1101,9 +1188,17 @@ static bool imsic_vsfile_needs_move(const struct vcpu *v)
 void imsic_migrate_vcpu(struct vcpu *v)
 {
     ASSERT(v == current);
+    ASSERT(!local_irq_is_enabled());
 
     if ( !imsic_vsfile_needs_move(v) )
         return;
 
-    BUG_ON("unimplemented");
+    /*
+     * The move maps the new file into the guest's G-stage, which takes the
+     * p2m lock, and sends IPIs to the pCPU owning the old file: both need
+     * IRQs enabled.
+     */
+    local_irq_enable();
+    imsic_vsfile_move(v);
+    local_irq_disable();
 }
