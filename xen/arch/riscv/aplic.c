@@ -28,8 +28,6 @@
 #include <asm/io.h>
 #include <asm/riscv_encoding.h>
 
-#define APLIC_DEFAULT_PRIORITY  1
-
 static struct aplic_priv aplic = {
     .lock = SPIN_LOCK_UNLOCKED,
 };
@@ -58,9 +56,9 @@ static void __init aplic_init_hw_interrupts(void)
         /*
          * Low bits of target register contains Interrupt Priority bits which
          * can't be zero according to AIA spec.
-         * Thereby they are initialized to APLIC_DEFAULT_PRIORITY.
+         * Thereby they are initialized to APLIC_TARGET_IPRIO_DEFAULT.
          */
-        writel(APLIC_DEFAULT_PRIORITY, &aplic.regs->target[i]);
+        writel(APLIC_TARGET_IPRIO_DEFAULT, &aplic.regs->target[i]);
     }
 
     writel(APLIC_DOMAINCFG_IE | APLIC_DOMAINCFG_DM, &aplic.regs->domaincfg);

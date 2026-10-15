@@ -86,9 +86,13 @@
 #define APLIC_TARGET_LAST               0x3ffc
 #define  APLIC_TARGET_HART_IDX          GENMASK(31, 18)
 #define  APLIC_TARGET_HART_IDX_SHIFT    18
+/* If target is in MSI delivery mode (domaincfg.DM = 1) */
 #define  APLIC_TARGET_GUEST_IDX         GENMASK(17, 12)
 /* Bit 11 is reserved and reads as zero */
 #define  APLIC_TARGET_EIID              GENMASK(10, 0)
+/* If target is in direct delivery mode (domaincfg.DM = 0) */
+#define  APLIC_TARGET_IPRIO             GENMASK(7, 0)
+#define   APLIC_TARGET_IPRIO_DEFAULT    1U
 
 #define APLIC_IDC_SIZE                  32
 
