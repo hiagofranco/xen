@@ -463,7 +463,7 @@ int route_irq_to_guest(struct domain *d, unsigned int virq,
     if ( retval )
         goto out;
 
-    retval = intc_route_irq_to_guest(desc, IRQ_NO_PRIORITY);
+    retval = intc_route_irq_to_guest(d, virq, desc, IRQ_NO_PRIORITY);
     if ( retval )
     {
         struct irqaction *action = irq_detach_action(desc, info);

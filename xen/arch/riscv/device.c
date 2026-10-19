@@ -25,14 +25,21 @@ int __overlay_init map_irq_to_domain(struct domain *d, unsigned int irq,
     {
         /*
          * -EEXIST merely means that the IRQ has already been reserved, which
-         * legitimately happens when the IRQ is shared between devices. Any
-         * other failure has to be fatal: the IRQ would otherwise be routed to
-         * the domain without domain_vintc_deinit() ever releasing it again.
+         * legitimately happens when the IRQ is shared between devices: the
+         * vIRQ is then a h/w source already, route_irq_to_guest() having
+         * connected it to the IRQ for the first of them. A vIRQ reserved for
+         * a virtual source, whose line an emulator in Xen drives, mustn't be
+         * taken over by a h/w IRQ, though. Any other failure has to be fatal
+         * too: the IRQ would otherwise be routed to the domain without
+         * domain_vintc_deinit() ever releasing it again.
          */
         res = vintc_reserve_virq(d, irq);
-        if ( res && (res != -EEXIST) )
+        if ( res == -EEXIST && test_bit(irq, d->arch.vintc->hw_irqs) )
+            res = 0;
+        if ( res )
         {
-            printk(XENLOG_ERR "Unable to reserve vIRQ %u for %pd\n", irq, d);
+            printk(XENLOG_ERR "Unable to reserve vIRQ %u for %pd: %d\n",
+                   irq, d, res);
             return res;
         }
 

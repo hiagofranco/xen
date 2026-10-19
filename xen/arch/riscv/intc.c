@@ -82,18 +82,24 @@ void intc_route_irq_to_xen(struct irq_desc *desc, unsigned int priority)
     intc_set_irq_priority(desc, priority);
 }
 
-int intc_route_irq_to_guest(struct irq_desc *desc,
-                            unsigned int priority)
+int intc_route_irq_to_guest(const struct domain *d, unsigned int virq,
+                            struct irq_desc *desc, unsigned int priority)
 {
     ASSERT(spin_is_locked(&desc->lock));
 
     ASSERT(intc_hw_ops->guest_irq_type);
+
+    /* The caller has reserved @virq, see vintc_reserve_virq(). */
+    ASSERT(virq < d->arch.vintc->nr_virqs);
 
     desc->handler = intc_hw_ops->guest_irq_type;
     desc->status |= IRQ_GUEST;
 
     intc_set_irq_type(desc, desc->arch.type);
     intc_set_irq_priority(desc, priority);
+
+    /* Connect @virq to the h/w IRQ: it isn't a virtual source. */
+    set_bit(virq, d->arch.vintc->hw_irqs);
 
     return 0;
 }
@@ -126,7 +132,10 @@ int domain_vintc_init(struct domain *d)
         d->arch.vintc->used_irqs =
             xvzalloc_array(unsigned long,
                            BITS_TO_LONGS(d->arch.vintc->nr_virqs));
-        if ( !d->arch.vintc->used_irqs )
+        d->arch.vintc->hw_irqs =
+            xvzalloc_array(unsigned long,
+                           BITS_TO_LONGS(d->arch.vintc->nr_virqs));
+        if ( !d->arch.vintc->used_irqs || !d->arch.vintc->hw_irqs )
             ret = -ENOMEM;
     }
 
@@ -140,16 +149,18 @@ void domain_vintc_deinit(struct domain *d)
     if ( !d->arch.vintc )
         return;
 
-    if ( d->arch.vintc->used_irqs )
+    if ( d->arch.vintc->hw_irqs )
     {
         unsigned int virq;
 
+        /* A virtual source has no h/w IRQ routed to the domain to release. */
         for ( virq = 0; virq < d->arch.vintc->nr_virqs; virq++ )
-            if ( test_bit(virq, d->arch.vintc->used_irqs) )
+            if ( test_bit(virq, d->arch.vintc->hw_irqs) )
                 release_guest_irq(d, virq);
-
-        XVFREE(d->arch.vintc->used_irqs);
     }
+
+    XVFREE(d->arch.vintc->used_irqs);
+    XVFREE(d->arch.vintc->hw_irqs);
 
     switch ( variant )
     {
@@ -169,6 +180,7 @@ void domain_vintc_deinit(struct domain *d)
  * Returns 0 on success, -EEXIST if @virq has already been reserved, which
  * legitimately happens when an IRQ is shared between devices, and -ERANGE if
  * @virq is outside the range of the interrupt sources the vINTC provides.
+ * A virtual source can't be shared, so for one -EEXIST is a failure.
  */
 int __overlay_init vintc_reserve_virq(const struct domain *d,
                                       unsigned int virq)

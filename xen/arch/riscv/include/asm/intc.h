@@ -69,6 +69,8 @@ struct vintc_ops {
 struct vintc {
     unsigned int nr_virqs;
     unsigned long *used_irqs;
+    /* Sources of used_irqs a h/w IRQ is routed to; the rest are virtual. */
+    unsigned long *hw_irqs;
     /* Callbacks invoked during domain construction only. */
     const struct vintc_init_ops *init_ops;
     /* Runtime callbacks used for the lifetime of the guest. */
@@ -82,7 +84,8 @@ void register_intc_ops(const struct intc_hw_init_ops *init_ops);
 void intc_init(void);
 
 void intc_route_irq_to_xen(struct irq_desc *desc, unsigned int priority);
-int intc_route_irq_to_guest(struct irq_desc *desc, unsigned int priority);
+int intc_route_irq_to_guest(const struct domain *d, unsigned int virq,
+                            struct irq_desc *desc, unsigned int priority);
 
 void intc_handle_external_irqs(struct cpu_user_regs *regs);
 
