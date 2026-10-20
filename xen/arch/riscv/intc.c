@@ -95,7 +95,7 @@ int intc_route_irq_to_guest(const struct domain *d, unsigned int virq,
     desc->handler = intc_hw_ops->guest_irq_type;
     desc->status |= IRQ_GUEST;
 
-    intc_set_irq_type(desc, desc->arch.type);
+    intc_set_irq_type(desc, IRQ_TYPE_NONE);
     intc_set_irq_priority(desc, priority);
 
     /* Connect @virq to the h/w IRQ: it isn't a virtual source. */
