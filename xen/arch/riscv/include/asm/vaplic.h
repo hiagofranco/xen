@@ -23,11 +23,22 @@ struct vcpu;
 
 /* State of one vAPLIC interrupt source. */
 struct vaplic_source {
-    /* Protects target together with the h/w target register of the source. */
+    /*
+     * Protects target and sourcecfg, together with the corresponding h/w
+     * registers of a h/w source.
+     */
     spinlock_t lock;
 
     /* Guest's view of the APLIC target register. */
     uint32_t target;
+
+    /*
+     * sourcecfg register as the guest sees it:
+     *  - for a virtual source, this is the only place it is kept;
+     *  - for a h/w source, it is a copy of the h/w register, which only the
+     *    guest changes.
+     */
+    uint32_t sourcecfg;
 };
 
 struct vaplic_regs {
@@ -35,6 +46,15 @@ struct vaplic_regs {
 
     /* Register to generate an extempore MSI. */
     uint32_t genmsi;
+
+    /*
+     * Interrupt-enable bits as the guest sees them, a word per 32 sources:
+     *  - for a virtual source, this is the only place its bit is kept;
+     *  - for a h/w source, it is a copy of the h/w bit, which only the guest
+     *    changes. While domaincfg.IE is 0, the h/w bit is kept clear and the
+     *    guest's view is kept here only.
+     */
+    uint32_t *ie;
 
     /*
      * Indexed by source number. The array holds d->arch.vintc->nr_virqs
@@ -47,7 +67,11 @@ struct vaplic {
     struct vintc vintc;
     struct vaplic_regs regs;
 
-    /* Protects access to the vAPLIC registers. */
+    /*
+     * Protects access to the vAPLIC registers. A vaplic_source.lock, where
+     * needed too, is taken first, to avoid an ABBA deadlock (see
+     * vaplic_sourcecfg_write()).
+     */
     spinlock_t lock;
 
     paddr_t regs_start;
