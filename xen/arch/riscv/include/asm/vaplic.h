@@ -39,6 +39,15 @@ struct vaplic_source {
      *    guest changes.
      */
     uint32_t sourcecfg;
+
+    /*
+     * Level of the line of a virtual source, protected by vaplic->lock.
+     *
+     * TODO: nothing drives it yet. The emulator of a device with an interrupt
+     * line will have to, and to call vaplic_forward_msis() for a source a
+     * change of the level makes pending.
+     */
+    bool level;
 };
 
 struct vaplic_regs {
@@ -55,6 +64,13 @@ struct vaplic_regs {
      *    guest's view is kept here only.
      */
     uint32_t *ie;
+
+    /*
+     * Interrupt-pending bits of the virtual sources, a word per 32 sources.
+     * Those of the h/w sources change in the h/w by themselves, so they are
+     * read from the h/w instead.
+     */
+    uint32_t *ip;
 
     /*
      * Indexed by source number. The array holds d->arch.vintc->nr_virqs

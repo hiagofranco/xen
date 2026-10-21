@@ -32,17 +32,14 @@ unsigned int __ro_after_init guest_aplic_num_sources;
 /*
  * Only a h/w source of a domain, one a h/w IRQ is routed to (see
  * vintc.hw_irqs), may be accessed in the h/w. A virtual source has nothing
- * there: its sourcecfg[], target[] and enable bit are emulated, and the rest
- * of its registers, until they are emulated too, read as zero and ignore
- * writes, like those of a source not assigned to the domain.
+ * there: all its registers are emulated.
  *
  * A write passed through to the h/w can thus affect only the h/w sources of
- * the domain: a write to setip[], clrip[], setie[] or clrie[] is masked
+ * the domain: a write to setip[], in_clrip[], setie[] or clrie[] is masked
  * with them, which leaves the bits of the other sources at 0, i.e. untouched,
- * and {set,clr}ipnum, setipnum_le and sourcecfg[] name a source checked to
- * be one of them. route_irq_to_guest() never assigns a source to more than
- * one domain, or to both a domain and Xen, and as virq == pirq, no
- * translation is needed either.
+ * and sourcecfg[] names a source checked to be one of them.
+ * route_irq_to_guest() never assigns a source to more than one domain, or to
+ * both a domain and Xen, and as virq == pirq, no translation is needed either.
  */
 static bool vaplic_is_hw_source(const struct domain *d, unsigned int irqn)
 {
@@ -91,6 +88,37 @@ static bool vaplic_source_is_active(const struct domain *d, unsigned int irqn)
 
     return MASK_EXTR(sourcecfg, APLIC_SOURCECFG_SM) !=
            APLIC_SOURCECFG_SM_INACTIVE;
+}
+
+/* Whether virtual source @src is level-sensitive. */
+static bool vaplic_is_level(const struct vaplic_source *src)
+{
+    unsigned int sm = MASK_EXTR(src->sourcecfg, APLIC_SOURCECFG_SM);
+
+    return (sm == APLIC_SOURCECFG_SM_LEVEL_HIGH) ||
+           (sm == APLIC_SOURCECFG_SM_LEVEL_LOW);
+}
+
+/*
+ * The rectified input value of virtual source @src: the level of its line,
+ * inverted for an Edge0 or Level0 source, and zero for an inactive or
+ * Detached one.
+ */
+static bool vaplic_rectified_input(const struct vaplic_source *src)
+{
+    switch ( MASK_EXTR(src->sourcecfg, APLIC_SOURCECFG_SM) )
+    {
+    case APLIC_SOURCECFG_SM_EDGE_RISE:
+    case APLIC_SOURCECFG_SM_LEVEL_HIGH:
+        return src->level;
+
+    case APLIC_SOURCECFG_SM_EDGE_FALL:
+    case APLIC_SOURCECFG_SM_LEVEL_LOW:
+        return !src->level;
+
+    default:
+        return false;
+    }
 }
 
 /* Emulate a read of target[@irqn]. */
@@ -392,36 +420,102 @@ static void vaplic_sourcecfg_write(const struct domain *d, unsigned int irqn,
         value = APLIC_SOURCECFG_SM_INACTIVE;
 
     /*
-     * The enable bit of an inactive source is read-only zero, and stays zero
-     * when the source becomes active again, so making the source inactive
-     * clears it: the h/w does so for a h/w source, and the guest's view has
-     * to follow. vaplic->lock keeps a concurrent write to an enable register
-     * from setting the bit meanwhile: such a write sees either the source
-     * still active, and then its bit is cleared here afterwards, or the
-     * source inactive, and then it doesn't set the bit. IRQs are already off
-     * under src->lock.
+     * vaplic->lock keeps a concurrent write to an enable or pending register
+     * from setting a bit of the source while it is made inactive: such a
+     * write sees either the source still active, and then its bit is cleared
+     * below afterwards, or the source inactive, and then it doesn't set the
+     * bit. IRQs are already off under src->lock.
      */
     spin_lock(&vaplic->lock);
 
     write_atomic(&src->sourcecfg, value);
 
+    /*
+     * According to the AIA spec:
+     *   Whenever interrupt source i is inactive in an interrupt domain, the
+     *   corresponding interrupt-pending and interrupt-enable bits within the
+     *   domain are read-only zeros, [...]. If source i is changed from
+     *   inactive to an active mode, the interrupt source's pending and
+     *   enable bits remain zeros, unless set automatically [...].
+     *
+     * So making the source inactive clears them. For a h/w source, the h/w
+     * clears its own bits and regs.ie[] follows; regs.ip[] holds none of
+     * them.
+     */
     if ( !vaplic_source_is_active(d, irqn) )
+    {
         write_atomic(&vaplic->regs.ie[irqn / IRQS_PER_WORD],
                      vaplic->regs.ie[irqn / IRQS_PER_WORD] &
                      ~BIT(irqn % IRQS_PER_WORD, U));
+        vaplic->regs.ip[irqn / IRQS_PER_WORD] &= ~BIT(irqn % IRQS_PER_WORD, U);
+    }
+    /*
+     * The pending bit of a level-sensitive source is cleared whenever its
+     * rectified input value is low, which the new source mode may make it.
+     * The AIA spec permits a write to sourcecfg[] not to set the pending bit
+     * when the value is high under the new source mode, so it is left alone
+     * then. The h/w takes care of all that for a h/w source.
+     */
+    else if ( !vaplic_is_hw_source(d, irqn) && vaplic_is_level(src) &&
+              !vaplic_rectified_input(src) )
+        vaplic->regs.ip[irqn / IRQS_PER_WORD] &= ~BIT(irqn % IRQS_PER_WORD, U);
 
     spin_unlock(&vaplic->lock);
 
-    /*
-     * TODO: when the pending bit of a virtual source is emulated:
-     *  - making the source inactive has to clear it too;
-     *  - a write which leaves the source active may change its rectified
-     *    input value, which may set its pending bit (or, for a
-     *    level-sensitive source, clear it). If domaincfg.IE is 1, a source
-     *    which is then pending and enabled has to get its MSI sent.
-     */
+    /* No MSI to send: this write can only clear the enable and pending bits. */
 
     spin_unlock_irqrestore(&src->lock, flags);
+}
+
+/*
+ * Forward by MSI the pending and enabled virtual sources among @srcs, word
+ * @word_idx in the setip[] layout.
+ */
+static void vaplic_forward_msis(const struct domain *d, unsigned int word_idx,
+                                uint32_t srcs)
+{
+    struct vaplic *vaplic = to_vaplic(d);
+    uint32_t ready;
+
+    ASSERT(spin_is_locked(&vaplic->lock));
+
+    /*
+     * According to the AIA spec:
+     *   An MSI is sent for a specific source only when the source's
+     *   corresponding pending and enable bits are both one and the IE field
+     *   of register domaincfg is also one.
+     */
+    if ( !(vaplic->regs.domaincfg & APLIC_DOMAINCFG_IE) )
+        return;
+
+    /* The h/w forwards the MSIs of the h/w sources by itself. */
+    ready = srcs & vaplic_virtual_sources(d, word_idx) &
+            vaplic->regs.ie[word_idx] & vaplic->regs.ip[word_idx];
+
+    for_each_set_bit ( bit, ready )
+    {
+        const struct vaplic_source *src =
+            &vaplic->regs.sources[word_idx * IRQS_PER_WORD + bit];
+        /*
+         * src->lock can't be taken under vaplic->lock (see the lock order in
+         * struct vaplic), so target is read without it, but only once, so
+         * that the hart index and the EIID come from the same value. An MSI
+         * racing with a write to target[] may reach the old target, which the
+         * AIA spec allows an APLIC too.
+         */
+        uint32_t target = read_atomic(&src->target);
+        const struct vcpu *v = vaplic_target_decode_vcpu(d, target);
+
+        if ( v )
+            vcpu_imsic_inject(v, MASK_EXTR(target, APLIC_TARGET_EIID));
+    }
+
+    /*
+     * According to the AIA spec:
+     *   If and when an MSI is sent, the source's interrupt pending bit is
+     *   cleared.
+     */
+    vaplic->regs.ip[word_idx] &= ~ready;
 }
 
 /* Emulate a read of setie[@word_idx]. */
@@ -471,11 +565,8 @@ static void vaplic_setie_write(const struct domain *d, unsigned int word_idx,
         aplic_hw_write_reg(offsetof(struct aplic_regs, setie[word_idx]),
                            value & hw_srcs);
 
-    /*
-     * TODO: when the pending bits of a virtual source are emulated, if
-     * domaincfg.IE is 1, a source this write has enabled which is pending
-     * has to get its MSI sent.
-     */
+    /* A pending virtual source this write has enabled gets its MSI now. */
+    vaplic_forward_msis(d, word_idx, value & ~hw_srcs);
 
     spin_unlock_irqrestore(&vaplic->lock, flags);
 }
@@ -537,14 +628,19 @@ static void vaplic_domaincfg_write(const struct domain *d, uint32_t value)
     spin_lock_irqsave(&vaplic->lock, flags);
 
     old = vaplic->regs.domaincfg;
+
+    /* vaplic_forward_msis() below has to see the new IE. */
     vaplic->regs.domaincfg = domaincfg;
 
-    /* Only a change of IE has anything to do with the h/w. */
+    /* Only a change of IE needs more than storing the new value. */
     if ( (old ^ domaincfg) & APLIC_DOMAINCFG_IE )
     {
         for ( i = 0; i < vaplic_nr_words(d); i++ )
         {
             uint32_t hw_srcs = vaplic_hw_sources(d, i);
+
+            /* The pending and enabled virtual sources get their MSIs now. */
+            vaplic_forward_msis(d, i, ~0U);
 
             if ( !hw_srcs )
                 continue;
@@ -558,11 +654,127 @@ static void vaplic_domaincfg_write(const struct domain *d, uint32_t value)
         }
     }
 
+    spin_unlock_irqrestore(&vaplic->lock, flags);
+}
+
+/*
+ * The bits of @srcs, virtual sources in setip[@word_idx], whose pending bits
+ * a write to setip[] can set.
+ */
+static uint32_t vaplic_pendable_sources(const struct domain *d,
+                                        unsigned int word_idx, uint32_t srcs)
+{
+    const struct vaplic *vaplic = to_vaplic(d);
+    uint32_t pendable = 0;
+
+    ASSERT(spin_is_locked(&vaplic->lock));
+
+    for_each_set_bit ( bit, srcs )
+    {
+        unsigned int irqn = word_idx * IRQS_PER_WORD + bit;
+        const struct vaplic_source *src = &vaplic->regs.sources[irqn];
+
+        /*
+         * The pending bit of an inactive source is read-only zero. For a
+         * level-sensitive one in MSI delivery mode, according to the AIA spec:
+         *   The pending bit may also be set by a relevant write to a setip or
+         *   setipnum register when the rectified input value is high, but not
+         *   when the rectified input value is low.
+         */
+        if ( vaplic_source_is_active(d, irqn) &&
+             (!vaplic_is_level(src) || vaplic_rectified_input(src)) )
+            pendable |= BIT(bit, U);
+    }
+
+    return pendable;
+}
+
+/*
+ * Emulate a read of setip[@word_idx] (@setip) or of in_clrip[@word_idx]: the
+ * pending bits or the rectified input values of the sources.
+ */
+static uint32_t vaplic_ip_read(const struct domain *d, unsigned int word_idx,
+                               bool setip)
+{
+    struct vaplic *vaplic = to_vaplic(d);
+    uint32_t hw_srcs = vaplic_hw_sources(d, word_idx);
+    uint32_t virt_srcs = vaplic_virtual_sources(d, word_idx);
+    unsigned long flags;
+    uint32_t val = 0;
+
+    if ( !hw_srcs && !virt_srcs )
+        return 0;
+
+    word_idx = array_index_nospec(word_idx, vaplic_nr_words(d));
+
     /*
-     * TODO: when the pending bits of a virtual source are forwarded by MSI,
-     * setting IE has to get the MSI of each pending and enabled virtual
-     * source sent.
+     * vaplic->lock makes the read atomic as a whole, against a write to
+     * setip[] or in_clrip[] which changes both kinds of bits.
      */
+    spin_lock_irqsave(&vaplic->lock, flags);
+
+    if ( hw_srcs )
+        val = aplic_hw_read_reg(setip ? offsetof(struct aplic_regs,
+                                                 setip[word_idx])
+                                      : offsetof(struct aplic_regs,
+                                                 in_clrip[word_idx])) &
+              hw_srcs;
+
+    if ( setip )
+        val |= vaplic->regs.ip[word_idx] & virt_srcs;
+    else
+    {
+        for_each_set_bit ( bit, virt_srcs )
+        {
+            const struct vaplic_source *src =
+                &vaplic->regs.sources[word_idx * IRQS_PER_WORD + bit];
+
+            if ( vaplic_rectified_input(src) )
+                val |= BIT(bit, U);
+        }
+    }
+
+    spin_unlock_irqrestore(&vaplic->lock, flags);
+
+    return val;
+}
+
+/*
+ * Emulate a write of @value to setip[@word_idx] (@setip) or to
+ * in_clrip[@word_idx].
+ */
+static void vaplic_ip_write(const struct domain *d, unsigned int word_idx,
+                            uint32_t value, bool setip)
+{
+    struct vaplic *vaplic = to_vaplic(d);
+    uint32_t hw_srcs = vaplic_hw_sources(d, word_idx);
+    uint32_t virt_srcs = vaplic_virtual_sources(d, word_idx);
+    unsigned long flags;
+
+    value &= hw_srcs | virt_srcs;
+    if ( !value )
+        return;
+
+    word_idx = array_index_nospec(word_idx, vaplic_nr_words(d));
+
+    spin_lock_irqsave(&vaplic->lock, flags);
+
+    if ( value & hw_srcs )
+        aplic_hw_write_reg(setip ? offsetof(struct aplic_regs, setip[word_idx])
+                                 : offsetof(struct aplic_regs,
+                                            in_clrip[word_idx]),
+                           value & hw_srcs);
+
+    if ( setip )
+    {
+        vaplic->regs.ip[word_idx] |=
+            vaplic_pendable_sources(d, word_idx, value & virt_srcs);
+
+        /* An enabled source this write has made pending gets its MSI now. */
+        vaplic_forward_msis(d, word_idx, value & virt_srcs);
+    }
+    else
+        vaplic->regs.ip[word_idx] &= ~(value & virt_srcs);
 
     spin_unlock_irqrestore(&vaplic->lock, flags);
 }
@@ -636,7 +848,6 @@ static bool vaplic_emulate_load(const struct vcpu *curr, paddr_t addr,
     const struct domain *currd = curr->domain;
     const struct vaplic *vaplic = to_vaplic(currd);
     const unsigned int offset = addr - vaplic->regs_start;
-    uint32_t hw_srcs;
     unsigned int i;
 
     ASSERT(curr == current);
@@ -661,9 +872,9 @@ static bool vaplic_emulate_load(const struct vcpu *curr, paddr_t addr,
     case APLIC_SETIP_BASE ... APLIC_SETIP_LAST:
     case APLIC_CLRIP_BASE ... APLIC_CLRIP_LAST:
         i = regoffset_to_word_idx(offset & APLIC_SETCLR_OFFSET_MASK);
-        hw_srcs = vaplic_hw_sources(currd, i);
+        *out = vaplic_ip_read(currd, i, offset <= APLIC_SETIP_LAST);
 
-        break;
+        return true;
 
     case APLIC_SETIE_BASE ... APLIC_SETIE_LAST:
         i = regoffset_to_word_idx(offset & APLIC_SETCLR_OFFSET_MASK);
@@ -730,10 +941,6 @@ static bool vaplic_emulate_load(const struct vcpu *curr, paddr_t addr,
 
         return false;
     }
-
-    *out = aplic_hw_read_reg(offset) & hw_srcs;
-
-    return true;
 }
 
 static bool vaplic_emulate_store(const struct vcpu *curr, paddr_t addr,
@@ -801,22 +1008,22 @@ static bool vaplic_emulate_store(const struct vcpu *curr, paddr_t addr,
 
     case APLIC_SETIP_BASE ... APLIC_SETIP_LAST:
     case APLIC_CLRIP_BASE ... APLIC_CLRIP_LAST:
-    {
-        unsigned int word_idx =
-            regoffset_to_word_idx(offset & APLIC_SETCLR_OFFSET_MASK);
+        vaplic_ip_write(currd,
+                        regoffset_to_word_idx(offset &
+                                              APLIC_SETCLR_OFFSET_MASK),
+                        value, offset <= APLIC_SETIP_LAST);
 
-        value &= vaplic_hw_sources(currd, word_idx);
-
-        break;
-    }
+        return true;
 
     case APLIC_SETIPNUM:
     case APLIC_CLRIPNUM:
     case APLIC_SETIPNUM_LE:
-        if ( !value || !vaplic_is_hw_source(currd, value) )
-            return true;
+        if ( vaplic_is_assigned(currd, value) )
+            vaplic_ip_write(currd, value / IRQS_PER_WORD,
+                            BIT(value % IRQS_PER_WORD, U),
+                            offset != APLIC_CLRIPNUM);
 
-        break;
+        return true;
 
     /* Not implemented by vAPLIC, see vaplic_emulate_load(). */
     case APLIC_MMSICFGADDR:
@@ -849,11 +1056,6 @@ static bool vaplic_emulate_store(const struct vcpu *curr, paddr_t addr,
 
         return false;
     }
-
-    /* Passed through to the h/w, see vaplic_is_hw_source(). */
-    aplic_hw_write_reg(offset, value);
-
-    return true;
 }
 
 static int __init cf_check vaplic_make_domu_dt_node(struct kernel_info *kinfo)
@@ -1028,7 +1230,8 @@ int domain_vaplic_init(struct domain *d)
         spin_lock_init(&vaplic->regs.sources[i].lock);
 
     vaplic->regs.ie = xvzalloc_array(uint32_t, vaplic_nr_words(d));
-    if ( !vaplic->regs.ie )
+    vaplic->regs.ip = xvzalloc_array(uint32_t, vaplic_nr_words(d));
+    if ( !vaplic->regs.ie || !vaplic->regs.ip )
     {
         domain_vaplic_deinit(d);
 
@@ -1065,6 +1268,7 @@ void domain_vaplic_deinit(struct domain *d)
 
     vaplic = to_vaplic(d);
     d->arch.vintc = NULL;
+    xvfree(vaplic->regs.ip);
     xvfree(vaplic->regs.ie);
     xvfree(vaplic->regs.sources);
     xvfree(vaplic);
