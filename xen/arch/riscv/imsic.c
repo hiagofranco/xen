@@ -129,6 +129,18 @@ do {                                \
     csr_write(CSR_VSIREG, v);       \
 } while (0)
 
+#define imsic_vs_csr_read(c)        \
+({                                  \
+    csr_write(CSR_VSISELECT, c);    \
+    csr_read(CSR_VSIREG);           \
+})
+
+#define imsic_vs_csr_clear(c, v)    \
+do {                                \
+    csr_write(CSR_VSISELECT, c);    \
+    csr_clear(CSR_VSIREG, v);       \
+} while (0)
+
 /*
  * On RV64 a 64-bit EIx group is the even-numbered register alone, whereas on
  * RV32 it is split into the even-numbered (low half) and the following
@@ -430,11 +442,6 @@ static int __init imsic_parse_node(const struct dt_device_node *node,
         return -ENOENT;
     }
 
-    if ( dt_property_read_u32(node, "riscv,num-guest-ids", &tmp) )
-        guest_num_msis = min(GUEST_IMSIC_MAX_MSIS, tmp);
-    else
-        guest_num_msis = GUEST_IMSIC_MAX_MSIS;
-
     if ( (imsic_cfg.nr_ids < IMSIC_MIN_ID) ||
          (imsic_cfg.nr_ids > IMSIC_MAX_ID) )
     {
@@ -442,6 +449,39 @@ static int __init imsic_parse_node(const struct dt_device_node *node,
                node->name);
         return -ENOENT;
     }
+
+    /*
+     * A guest interrupt file implements as many identities as
+     * riscv,num-guest-ids says, or as many as the S-file does if it is
+     * absent.
+     */
+    if ( !dt_property_read_u32(node, "riscv,num-guest-ids", &tmp) )
+        tmp = imsic_cfg.nr_ids;
+
+    /*
+     * One identity more than the minimum is needed, as the last one is
+     * reserved below.
+     */
+    if ( (tmp <= IMSIC_MIN_ID) || (tmp > IMSIC_MAX_ID) )
+    {
+        printk(XENLOG_ERR
+               "%s: invalid number of guest interrupt identities\n",
+               node->name);
+        return -ENOENT;
+    }
+
+    /*
+     * Reserve the last identity of a guest interrupt file for synchronizing
+     * with the injections into the file (see imsic_vsfile_local_sync()), and
+     * give the guest at most GUEST_IMSIC_MAX_MSIS of the others. The AIA
+     * spec requires the number of identities to be one less than a multiple
+     * of 64, so round it down to the largest such number below
+     * guest_sync_id.
+     */
+    BUILD_BUG_ON((GUEST_IMSIC_MAX_MSIS & IMSIC_MIN_ID) != IMSIC_MIN_ID);
+    imsic_cfg.guest_sync_id = tmp;
+    guest_num_msis = min(GUEST_IMSIC_MAX_MSIS,
+                         ROUNDDOWN(tmp, IMSIC_MIN_ID + 1) - 1);
 
     imsic_cfg.nr_eix = DIV_ROUND_UP(imsic_cfg.nr_ids + 1, 64);
 
@@ -701,18 +741,58 @@ static void imsic_call_on_cpu(unsigned int cpu, void (*func)(void *),
 }
 
 /*
- * Ensure that all the MSIs the APLIC has already generated for the hart this
- * runs on have really reached the hart's IMSIC.
+ * Wait until the writes made to guest interrupt file @hgei of this hart through
+ * SETIPNUM_LE before this call have taken effect in it.
+ */
+static void imsic_vsfile_local_sync(unsigned int hgei)
+{
+    unsigned int id = imsic_cfg.guest_sync_id;
+    unsigned int isel =
+        (id / BITS_PER_LONG) * (BITS_PER_LONG / IMSIC_EIPx_BITS) + IMSIC_EIP0;
+    unsigned long bit = BIT(id % BITS_PER_LONG, UL);
+    void __iomem *va = imsic_cfg.msi[smp_processor_id()].files_va +
+                       hgei * IMSIC_MMIO_PAGE_SZ;
+    struct imsic_vsfile_ctx ctx;
+
+    imsic_vsfile_select(hgei, &ctx);
+
+    imsic_vs_csr_clear(isel, bit);
+
+    /*
+     * For FENCE, a CSR write counts as device output, which writel() doesn't
+     * order before its own write: should the IMSIC see the two the other way
+     * round, the clear would undo the write and the loop would never end.
+     */
+    RISCV_FENCE(o, o);
+    writel(id, va + IMSIC_MMIO_SETIPNUM_LE);
+
+    while ( !(imsic_vs_csr_read(isel) & bit) )
+        cpu_relax();
+
+    /* The identity is Xen's, so it mustn't be left pending in the file. */
+    imsic_vs_csr_clear(isel, bit);
+
+    imsic_vsfile_deselect(&ctx);
+}
+
+/*
+ * Ensure that all the MSIs already sent to the guest interrupt file @data names
+ * on the hart this runs on, by the h/w APLIC or by vAPLIC, have reached it.
  *
- * The barrier is the one described by the AIA specification in
- * "Synchronizing interactions between a hart and the APLIC": ask the APLIC to
- * send an MSI to the hart itself and wait until it shows up as pending in the
- * hart's own interrupt file. As it says nothing about MSIs on their way to
+ * For the h/w APLIC, the barrier is the one described by the AIA specification
+ * in "Synchronizing interactions between a hart and the APLIC": ask the APLIC
+ * to send an MSI to the hart itself and wait until it shows up as pending in
+ * the hart's own interrupt file. As it says nothing about MSIs on their way to
  * any other hart, it has to be executed by the pCPU owning the interrupt file
  * the MSIs were being sent to.
+ *
+ * vAPLIC sends its MSIs through SETIPNUM_LE, which that barrier doesn't cover,
+ * so they are waited for separately.
  */
-static void cf_check imsic_aplic_sync(void *unused)
+static void cf_check imsic_aplic_sync(void *data)
 {
+    const struct imsic_vsfile_data *idata = data;
+
     imsic_local_eix_update(imsic_sync_id(&imsic_cfg), 1, true, false);
 
     /*
@@ -727,6 +807,8 @@ static void cf_check imsic_aplic_sync(void *unused)
 
     while ( !imsic_local_is_pending(imsic_sync_id(&imsic_cfg)) )
         cpu_relax();
+
+    imsic_vsfile_local_sync(idata->hgei);
 }
 
 /*
