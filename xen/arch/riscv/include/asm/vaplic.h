@@ -33,6 +33,9 @@ struct vaplic_source {
 struct vaplic_regs {
     uint32_t domaincfg;
 
+    /* Register to generate an extempore MSI. */
+    uint32_t genmsi;
+
     /*
      * Indexed by source number. The array holds d->arch.vintc->nr_virqs
      * elements; sources[0] is unused as APLIC interrupt sources start from 1.
@@ -43,6 +46,9 @@ struct vaplic_regs {
 struct vaplic {
     struct vintc vintc;
     struct vaplic_regs regs;
+
+    /* Protects access to the vAPLIC registers. */
+    spinlock_t lock;
 
     paddr_t regs_start;
     unsigned int regs_size;

@@ -251,6 +251,69 @@ static uint32_t generate_auth_mask(const struct domain *currd,
            (first_bit % BITS_PER_LONG);
 }
 
+static uint32_t vaplic_genmsi_read(const struct domain *d)
+{
+    /*
+     * Busy always reads as zero, as the MSI is sent before the write to genmsi
+     * completes.
+     *
+     * No lock is needed: a read racing with a write may return the new value
+     * before the MSI has been sent, which looks the same to the guest as an
+     * MSI of an APLIC which hasn't taken effect at the IMSIC yet.
+     */
+    return read_atomic(&to_vaplic(d)->regs.genmsi);
+}
+
+static void vaplic_genmsi_write(const struct domain *d, uint32_t value)
+{
+    struct vaplic *vaplic = to_vaplic(d);
+    const struct vcpu *v;
+    unsigned long flags;
+
+    /*
+     * Hart Index and EIID behave as in a target register, Busy is read-only
+     * and all the other bits are reserved.
+     */
+    value &= APLIC_GENMSI_HART_IDX | APLIC_GENMSI_EIID;
+
+    v = domain_vcpu(d, MASK_EXTR(value, APLIC_GENMSI_HART_IDX));
+    if ( !v )
+    {
+        gdprintk(XENLOG_ERR, "Invalid vCPU id in genmsi\n");
+
+        /* Ignore such writes */
+        return;
+    }
+
+    /*
+     * According to the AIA spec:
+     *   All MSIs previously sent from this APLIC to the same hart must be
+     *   visible at the hart's IMSIC before the extempore MSI becomes visible
+     *   at the hart's IMSIC.
+     *
+     * The physical genmsi can't send an MSI to a guest interrupt file, so
+     * wait for the MSIs already sent to @v's file to arrive there.
+     *
+     * The barrier may need an IPI, which takes IRQs enabled, while a trap
+     * taken from a guest is handled with them disabled. Enable them for the
+     * time of the barrier: no lock is held here, and the CSRs describing the
+     * trap have been read already.
+     */
+    ASSERT(!local_irq_is_enabled());
+    local_irq_enable();
+    vcpu_imsic_aplic_barrier(v);
+    local_irq_disable();
+
+    spin_lock_irqsave(&vaplic->lock, flags);
+
+    write_atomic(&vaplic->regs.genmsi, value);
+
+    if ( vcpu_imsic_inject(v, MASK_EXTR(value, APLIC_GENMSI_EIID)) )
+        gdprintk(XENLOG_DEBUG, "genmsi: %pv has no h/w interrupt file\n", v);
+
+    spin_unlock_irqrestore(&vaplic->lock, flags);
+}
+
 static bool vaplic_emulate_load(const struct vcpu *curr, paddr_t addr,
                                 uint32_t *out)
 {
@@ -335,15 +398,11 @@ static bool vaplic_emulate_load(const struct vcpu *curr, paddr_t addr,
 
         return true;
 
-    /*
-     * TODO: emulate genmsi. A write to it has to send an extempore MSI to
-     * the target vCPU, and a guest typically waits for that MSI to become
-     * pending in its interrupt file. Just recording the written value would
-     * leave such a guest waiting forever, so until genmsi is emulated, an
-     * access to it is treated as an unhandled one, which gets the domain
-     * crashed.
-     */
     case APLIC_GENMSI:
+        *out = vaplic_genmsi_read(currd);
+
+        return true;
+
     default:
         gdprintk(XENLOG_WARNING, "Unhandled APLIC read at offset %#x\n",
                  offset);
@@ -472,8 +531,11 @@ static bool vaplic_emulate_store(const struct vcpu *curr, paddr_t addr,
 
         return true;
 
-    /* TODO: emulate genmsi, see vaplic_emulate_load(). */
     case APLIC_GENMSI:
+        vaplic_genmsi_write(currd, value);
+
+        return true;
+
     default:
         gdprintk(XENLOG_WARNING,
                  "Unhandled APLIC write at offset %#x (value %#x)\n",
@@ -669,6 +731,8 @@ int domain_vaplic_init(struct domain *d)
 
     for ( i = 0; i < d->arch.vintc->nr_virqs; i++ )
         spin_lock_init(&vaplic->regs.sources[i].lock);
+
+    spin_lock_init(&vaplic->lock);
 
     vaplic->regs_start = GUEST_APLIC_S_BASE;
     /*

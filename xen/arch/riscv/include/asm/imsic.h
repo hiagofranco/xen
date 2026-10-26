@@ -150,4 +150,6 @@ void cf_check imsic_migrate_vcpu(struct vcpu *v);
 
 int vcpu_imsic_inject(const struct vcpu *v, unsigned int iid);
 
+void vcpu_imsic_aplic_barrier(const struct vcpu *v);
+
 #endif /* RISCV_IMSIC_H */

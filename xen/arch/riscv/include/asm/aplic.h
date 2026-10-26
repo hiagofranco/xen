@@ -89,7 +89,9 @@
 #define APLIC_SETIPNUM_BE               0x2004
 
 #define APLIC_GENMSI                    0x3000
-#define APLIC_GENMSI_BUSY               BIT(12, U)
+#define  APLIC_GENMSI_HART_IDX          GENMASK(31, 18)
+#define  APLIC_GENMSI_BUSY              BIT(12, U)
+#define  APLIC_GENMSI_EIID              GENMASK(10, 0)
 
 #define APLIC_TARGET_BASE               0x3004
 #define APLIC_TARGET_LAST               0x3ffc

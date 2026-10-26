@@ -812,6 +812,46 @@ static void cf_check imsic_aplic_sync(void *data)
 }
 
 /*
+ * Make sure that all the MSIs the h/w APLIC or vAPLIC has already sent to @v's
+ * IMSIC interrupt file have arrived there.
+ *
+ * The barrier has to be executed by the pCPU owning the file, so for a file
+ * owned by another pCPU an IPI is sent, which has to be done with IRQs
+ * enabled.
+ *
+ * vsfile_lock can't be held across the barrier: the IPI takes IRQs enabled,
+ * while the write side is taken with IRQs disabled, by imsic_update_state()
+ * when @v acquires a file on the very pCPU the IPI goes to, so the two would
+ * wait for each other. Nor is it needed, should @v be migrated meanwhile:
+ *  - the migration does the barrier for the old file itself before moving its
+ *    state into the new one, and it is done by @v itself before it enters the
+ *    guest again;
+ *  - MSIs are redirected to the new file only after it has been published,
+ *    so whatever reaches the new file was sent after the lookup done here;
+ *  - should the file have been handed to another vCPU meanwhile, the wait
+ *    touches only the identity Xen reserves in it.
+ */
+void vcpu_imsic_aplic_barrier(const struct vcpu *v)
+{
+    struct vimsic_state *imsic = v->arch.vimsic_state;
+    struct imsic_vsfile_data idata = { };
+    unsigned long flags;
+    unsigned int cpu;
+
+    /* The file and the pCPU owning it have to be read together. */
+    read_lock_irqsave(&imsic->vsfile_lock, flags);
+    cpu = imsic->vsfile_cpu;
+    idata.hgei = imsic->guest_file_id;
+    read_unlock_irqrestore(&imsic->vsfile_lock, flags);
+
+    /* With no interrupt file, there is nothing an MSI can be on its way to. */
+    if ( cpu == CPU_NONE )
+        return;
+
+    imsic_call_on_cpu(cpu, imsic_aplic_sync, &idata);
+}
+
+/*
  * Make interrupt identity @iid pending in @v's IMSIC interrupt file, as an MSI
  * addressed to that file would.
  *
