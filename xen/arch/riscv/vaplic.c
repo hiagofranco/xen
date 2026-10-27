@@ -779,6 +779,56 @@ static void vaplic_ip_write(const struct domain *d, unsigned int word_idx,
     spin_unlock_irqrestore(&vaplic->lock, flags);
 }
 
+/*
+ * Set the level of the line of virtual source @virq of @d, as the emulator of
+ * the device in Xen driving it does.
+ */
+static void cf_check vaplic_set_irq_level(const struct domain *d,
+                                          unsigned int virq, bool level)
+{
+    struct vaplic *vaplic = to_vaplic(d);
+    struct vaplic_source *src;
+    unsigned int word_idx;
+    unsigned long flags;
+    uint32_t bit;
+    bool was_high;
+
+    /* Only a virtual source of @d has its line driven by an emulator. */
+    if ( !vaplic_is_assigned(d, virq) || vaplic_is_hw_source(d, virq) )
+    {
+        ASSERT_UNREACHABLE();
+        return;
+    }
+
+    virq = array_index_nospec(virq, d->arch.vintc->nr_virqs);
+    src = &vaplic->regs.sources[virq];
+    word_idx = virq / IRQS_PER_WORD;
+    bit = BIT(virq % IRQS_PER_WORD, U);
+
+    spin_lock_irqsave(&vaplic->lock, flags);
+
+    was_high = vaplic_rectified_input(src);
+    src->level = level;
+
+    /*
+     * According to the AIA spec, in MSI delivery mode a low-to-high
+     * transition of the rectified input value sets the pending bit of an
+     * edge- as well as of a level-sensitive source, and the pending bit of a
+     * level-sensitive one is cleared whenever the value is low. Neither
+     * happens to an inactive or a Detached source, whose rectified input
+     * value is always low.
+     */
+    if ( !was_high && vaplic_rectified_input(src) )
+        vaplic->regs.ip[word_idx] |= bit;
+    else if ( vaplic_is_level(src) && !vaplic_rectified_input(src) )
+        vaplic->regs.ip[word_idx] &= ~bit;
+
+    /* An enabled source the new level has made pending gets its MSI now. */
+    vaplic_forward_msis(d, word_idx, bit);
+
+    spin_unlock_irqrestore(&vaplic->lock, flags);
+}
+
 static uint32_t vaplic_genmsi_read(const struct domain *d)
 {
     /*
@@ -1189,6 +1239,7 @@ static const struct vintc_ops vintc_ops = {
      * by the vCPU itself. It moves it on its way to the guest instead.
      */
     .enter_guest = imsic_migrate_vcpu,
+    .set_irq_level = vaplic_set_irq_level,
 };
 
 int domain_vaplic_init(struct domain *d)

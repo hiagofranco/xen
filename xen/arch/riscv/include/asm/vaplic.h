@@ -41,11 +41,9 @@ struct vaplic_source {
     uint32_t sourcecfg;
 
     /*
-     * Level of the line of a virtual source, protected by vaplic->lock.
-     *
-     * TODO: nothing drives it yet. The emulator of a device with an interrupt
-     * line will have to, and to call vaplic_forward_msis() for a source a
-     * change of the level makes pending.
+     * Level of the line of a virtual source, as the emulator of the device
+     * in Xen drives it through vintc_set_irq_level(). Protected by
+     * vaplic->lock.
      */
     bool level;
 };

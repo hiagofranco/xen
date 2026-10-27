@@ -8,6 +8,8 @@
 #ifndef RISCV_INTC_H
 #define RISCV_INTC_H
 
+#include <xen/types.h>
+
 struct dt_device_node;
 
 enum intc_variant {
@@ -79,6 +81,10 @@ struct vintc_ops {
      * guest.
      */
     void (*enter_guest)(struct vcpu *v);
+
+    /* Set the level of the line of a virtual source */
+    void (*set_irq_level)(const struct domain *d, unsigned int virq,
+                          bool level);
 };
 
 struct vintc {
@@ -113,5 +119,8 @@ void vintc_ctxt_switch_from(struct vcpu *p);
 void vintc_ctxt_switch_to(struct vcpu *n);
 
 void vintc_enter_guest(struct vcpu *v);
+
+void vintc_set_irq_level(const struct domain *d, unsigned int virq,
+                         bool level);
 
 #endif /* RISCV_INTC_H */

@@ -224,3 +224,17 @@ void vintc_enter_guest(struct vcpu *v)
     if ( ops->enter_guest )
         ops->enter_guest(v);
 }
+
+/*
+ * Set the level of the line of virtual source @virq of @d. To be used by the
+ * emulator of a device in Xen, the line of which is connected to @virq: such
+ * a source has to be reserved with vintc_reserve_virq(), and no h/w IRQ may be
+ * routed to it.
+ */
+void vintc_set_irq_level(const struct domain *d, unsigned int virq,
+                         bool level)
+{
+    const struct vintc_ops *ops = d->arch.vintc->ops;
+
+    ops->set_irq_level(d, virq, level);
+}
