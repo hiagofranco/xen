@@ -24,11 +24,13 @@
 #include <xen/sched.h>
 #include <xen/smp.h>
 #include <xen/spinlock.h>
+#include <xen/vmap.h>
 #include <xen/xvmalloc.h>
 
 #include <asm/aia.h>
 #include <asm/aplic.h>
 #include <asm/imsic.h>
+#include <asm/io.h>
 #include <asm/p2m.h>
 #include <asm/vaplic.h>
 
@@ -181,10 +183,16 @@ static void imsic_update_state(struct vcpu *v, unsigned int guest_file_id)
     unsigned long flags;
     struct vimsic_state *vimsic_state = v->arch.vimsic_state;
     unsigned int cpu = guest_file_id ? v->processor : CPU_NONE;
+    void __iomem *vsfile_va = NULL;
+
+    if ( guest_file_id )
+        vsfile_va = imsic_cfg.msi[cpu].files_va +
+                    guest_file_id * IMSIC_MMIO_PAGE_SZ;
 
     write_lock_irqsave(&vimsic_state->vsfile_lock, flags);
     vimsic_state->guest_file_id = guest_file_id;
     vimsic_state->vsfile_cpu = cpu;
+    vimsic_state->vsfile_va = vsfile_va;
     write_unlock_irqrestore(&vimsic_state->vsfile_lock, flags);
 }
 
@@ -721,6 +729,45 @@ static void cf_check imsic_aplic_sync(void *unused)
         cpu_relax();
 }
 
+/*
+ * Make interrupt identity @iid pending in @v's IMSIC interrupt file, as an MSI
+ * addressed to that file would.
+ *
+ * An identity an IMSIC would ignore is ignored here too, and reported as
+ * success. -EOPNOTSUPP means that @v has no h/w guest interrupt file (a vCPU
+ * is given one only when it runs for the first time), and s/w guest interrupt
+ * files aren't supported yet.
+ */
+int vcpu_imsic_inject(const struct vcpu *v, unsigned int iid)
+{
+    struct vimsic_state *imsic = v->arch.vimsic_state;
+    unsigned long flags;
+    int rc = 0;
+
+    /* Identity 0 and identities the file doesn't implement are ignored. */
+    if ( !iid || iid > guest_num_msis )
+        return 0;
+
+    read_lock_irqsave(&imsic->vsfile_lock, flags);
+
+    if ( imsic->vsfile_cpu != CPU_NONE )
+    {
+        writel(iid, imsic->vsfile_va + IMSIC_MMIO_SETIPNUM_LE);
+
+        /*
+         * Keep the write ahead of the release of the read side, whose barrier
+         * orders only memory accesses.
+         */
+        RISCV_FENCE(o, w);
+    }
+    else
+        rc = -EOPNOTSUPP;
+
+    read_unlock_irqrestore(&imsic->vsfile_lock, flags);
+
+    return rc;
+}
+
 static void imsic_vsfile_local_clear(const struct imsic_vsfile_data *idata)
 {
     unsigned int i;
@@ -959,6 +1006,18 @@ int __init imsic_init(const struct dt_device_node *node)
         msi[cpu].base_addr = mmios[index].base_addr;
         msi[cpu].offset = reloff;
 
+        msi[cpu].files_va =
+            ioremap(msi[cpu].base_addr + msi[cpu].offset,
+                    IMSIC_HART_SIZE(imsic_cfg.guest_index_bits));
+        if ( !msi[cpu].files_va )
+        {
+            printk(XENLOG_ERR
+                   "%s: failed to map the interrupt files of cpu%u\n",
+                   node->name, cpu);
+            rc = -ENOMEM;
+            goto imsic_init_err;
+        }
+
         nr_handlers++;
     }
 
@@ -980,7 +1039,13 @@ int __init imsic_init(const struct dt_device_node *node)
 
  imsic_init_err:
     xvfree(mmios);
-    xvfree(msi);
+    if ( msi )
+    {
+        for ( unsigned int i = 0; i < nr_cpu_ids; i++ )
+            if ( msi[i].files_va )
+                iounmap(msi[i].files_va);
+        xvfree(msi);
+    }
 
     return rc;
 }

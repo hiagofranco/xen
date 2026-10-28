@@ -19,6 +19,8 @@
 #define IMSIC_MMIO_PAGE_SHIFT   12
 #define IMSIC_MMIO_PAGE_SZ      (1UL << IMSIC_MMIO_PAGE_SHIFT)
 
+#define IMSIC_MMIO_SETIPNUM_LE  0x00
+
 #define IMSIC_MIN_ID            63
 #define IMSIC_MAX_ID            2047
 
@@ -34,6 +36,8 @@
 struct imsic_msi {
     paddr_t base_addr;
     unsigned long offset;
+    /* Xen's mapping of this hart's interrupt files, to send MSIs to them. */
+    void __iomem *files_va;
 };
 
 struct imsic_config {
@@ -105,6 +109,8 @@ struct vimsic_state {
      * h/w IMSIC VS-file -> vsfile_cpu < NR_CPUS
      */
     unsigned int vsfile_cpu;
+    /* Xen's mapping of the h/w IMSIC VS-file, NULL while there is none. */
+    void __iomem *vsfile_va;
 };
 
 struct dt_device_node;
@@ -134,5 +140,7 @@ int imsic_map_guest_file(struct vcpu *v, unsigned int vsfile_id);
 void imsic_vsfile_attach(struct vcpu *v);
 
 void cf_check imsic_migrate_vcpu(struct vcpu *v);
+
+int vcpu_imsic_inject(const struct vcpu *v, unsigned int iid);
 
 #endif /* RISCV_IMSIC_H */
