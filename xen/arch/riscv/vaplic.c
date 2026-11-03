@@ -32,8 +32,8 @@ unsigned int __ro_after_init guest_aplic_num_sources;
 /*
  * Only a h/w source of a domain, one a h/w IRQ is routed to (see
  * vintc.hw_irqs), may be accessed in the h/w. A virtual source has nothing
- * there: its sourcecfg[] and its enable bit are emulated, and the rest of
- * its registers, until they are emulated too, read as zero and ignore
+ * there: its sourcecfg[], target[] and enable bit are emulated, and the rest
+ * of its registers, until they are emulated too, read as zero and ignore
  * writes, like those of a source not assigned to the domain.
  *
  * A write passed through to the h/w can thus affect only the h/w sources of
@@ -93,6 +93,7 @@ static bool vaplic_source_is_active(const struct domain *d, unsigned int irqn)
            APLIC_SOURCECFG_SM_INACTIVE;
 }
 
+/* Emulate a read of target[@irqn]. */
 static uint32_t vaplic_target_read(const struct domain *d, unsigned int irqn)
 {
     struct vaplic *vaplic = to_vaplic(d);
@@ -100,8 +101,8 @@ static uint32_t vaplic_target_read(const struct domain *d, unsigned int irqn)
     unsigned long flags;
     uint32_t val = 0;
 
-    /* target[0] doesn't exist so irqn == 0 should be impossible */
-    if ( !irqn || irqn >= vaplic->vintc.nr_virqs )
+    /* target[] of a source not assigned to @d is read-only zero. */
+    if ( !vaplic_is_assigned(d, irqn) )
         return 0;
 
     irqn = array_index_nospec(irqn, vaplic->vintc.nr_virqs);
@@ -127,12 +128,11 @@ static void vaplic_target_write(const struct domain *d, unsigned int irqn,
                                 uint32_t value)
 {
     struct vaplic *vaplic = to_vaplic(d);
-    struct vimsic_state *vimsic_state;
     const struct vcpu *target_vcpu;
     struct vaplic_source *src;
     unsigned long flags;
 
-    if ( !vaplic_is_hw_source(d, irqn) )
+    if ( !vaplic_is_assigned(d, irqn) )
         return;
 
     irqn = array_index_nospec(irqn, d->arch.vintc->nr_virqs);
@@ -154,38 +154,43 @@ static void vaplic_target_write(const struct domain *d, unsigned int irqn,
      * spec makes it read-only zero unless the domain's harts implement the
      * H extension, which a guest's harts don't. Bit 11 is reserved and reads
      * as zero, so only Hart Index and EIID are kept.
-     * What ends up in the h/w register is Xen's own value anyway:
-     * aplic_msi_target_gen() takes only EIID from it.
+     * What ends up in the h/w register of a h/w source is Xen's own value
+     * anyway: aplic_msi_target_gen() takes only EIID from it.
      */
     value &= APLIC_TARGET_HART_IDX | APLIC_TARGET_EIID;
 
     src = &vaplic->regs.sources[irqn];
-    vimsic_state = target_vcpu->arch.vimsic_state;
 
     spin_lock_irqsave(&src->lock, flags);
 
     write_atomic(&src->target, value);
 
-    /* IRQs are already off under src->lock. */
-    read_lock(&vimsic_state->vsfile_lock);
+    /* Only a h/w source has a h/w register to update. */
+    if ( vaplic_is_hw_source(d, irqn) )
+    {
+        struct vimsic_state *vimsic_state = target_vcpu->arch.vimsic_state;
 
-    /*
-     * The h/w register names the hart and the guest interrupt file MSIs are
-     * sent to, and there is none of either until the target vCPU is given a
-     * h/w guest interrupt file, so until then only the stored copy is
-     * updated. imsic_vsfile_attach() writes it to the h/w, through
-     * vaplic_reconfigure_target(), once there is such a file.
-     *
-     * TODO: once s/w guest interrupt files are supported, a vCPU using one
-     * still needs its MSIs, so the h/w register will have to be written for
-     * it too, pointing at an interrupt file Xen receives them in on the
-     * vCPU's behalf.
-     */
-    if ( vimsic_state->vsfile_cpu != CPU_NONE )
-        aplic_hw_write_reg(offsetof(struct aplic_regs, target[irqn - 1]),
-                           aplic_msi_target_gen(target_vcpu, value));
+        /* IRQs are already off under src->lock. */
+        read_lock(&vimsic_state->vsfile_lock);
 
-    read_unlock(&vimsic_state->vsfile_lock);
+        /*
+         * The h/w register names the hart and the guest interrupt file MSIs
+         * are sent to, and there is none of either until the target vCPU is
+         * given a h/w guest interrupt file, so until then only the stored
+         * copy is updated. imsic_vsfile_attach() writes it to the h/w, through
+         * vaplic_reconfigure_target(), once there is such a file.
+         *
+         * TODO: once s/w guest interrupt files are supported, a vCPU using
+         * one still needs its MSIs, so the h/w register will have to be
+         * written for it too, pointing at an interrupt file Xen receives
+         * them in on the vCPU's behalf.
+         */
+        if ( vimsic_state->vsfile_cpu != CPU_NONE )
+            aplic_hw_write_reg(offsetof(struct aplic_regs, target[irqn - 1]),
+                               aplic_msi_target_gen(target_vcpu, value));
+
+        read_unlock(&vimsic_state->vsfile_lock);
+    }
 
     spin_unlock_irqrestore(&src->lock, flags);
 }
@@ -408,10 +413,8 @@ static void vaplic_sourcecfg_write(const struct domain *d, unsigned int irqn,
     spin_unlock(&vaplic->lock);
 
     /*
-     * TODO: when the pending bit and target[] of a virtual source are
-     * emulated:
-     *  - making the source inactive has to clear the pending bit too, and
-     *    target[] has to read as zero while the source is inactive;
+     * TODO: when the pending bit of a virtual source is emulated:
+     *  - making the source inactive has to clear it too;
      *  - a write which leaves the source active may change its rectified
      *    input value, which may set its pending bit (or, for a
      *    level-sensitive source, clear it). If domaincfg.IE is 1, a source
@@ -712,7 +715,7 @@ static bool vaplic_emulate_load(const struct vcpu *curr, paddr_t addr,
          */
         i = regoffset_to_word_idx(offset - APLIC_GENMSI);
 
-        *out = vaplic_is_hw_source(currd, i) ? vaplic_target_read(currd, i) : 0;
+        *out = vaplic_target_read(currd, i);
 
         return true;
 
