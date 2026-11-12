@@ -152,6 +152,38 @@ int sbi_remote_hfence_gvma_vmid(const cpumask_t *cpu_mask, vaddr_t start,
                                 size_t size, unsigned long vmid);
 
 /*
+ * Instruct the remote harts to execute FENCE.I.
+ *
+ * @param cpu_mask a cpu mask containing all the target CPUs (in Xen space).
+ */
+int sbi_remote_fence_i(const cpumask_t *cpu_mask);
+
+/*
+ * Instruct the remote harts to execute one or more HFENCE.VVMA
+ * instructions, covering the range of guest virtual addresses
+ * in [start_addr, start_addr + size).
+ *
+ * @param cpu_mask a cpu mask containing all the target CPUs (in Xen space).
+ * @param start guest virtual address start
+ * @param size guest virtual address range size
+ */
+int sbi_remote_hfence_vvma(const cpumask_t *cpu_mask, vaddr_t start,
+                           size_t size);
+
+/*
+ * Instruct the remote harts to execute one or more HFENCE.VVMA
+ * instructions, covering the range of guest virtual addresses
+ * in [start_addr, start_addr + size) only for the given ASID.
+ *
+ * @param cpu_mask a cpu mask containing all the target CPUs (in Xen space).
+ * @param start guest virtual address start
+ * @param size guest virtual address range size
+ * @param asid guest address space id
+ */
+int sbi_remote_hfence_vvma_asid(const cpumask_t *cpu_mask, vaddr_t start,
+                                size_t size, unsigned long asid);
+
+/*
  * Request the SBI implementation to stop executing the calling hart in
  * supervisor-mode and return its ownership to the SBI implementation.
  * This call is not expected to return under normal conditions.

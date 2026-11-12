@@ -361,6 +361,31 @@ int sbi_remote_hfence_gvma_vmid(const cpumask_t *cpu_mask, vaddr_t start,
                       cpu_mask, start, size, vmid);
 }
 
+int sbi_remote_fence_i(const cpumask_t *cpu_mask)
+{
+    ASSERT(sbi_rfence);
+
+    return sbi_rfence(SBI_EXT_RFENCE_REMOTE_FENCE_I, cpu_mask, 0, 0, 0);
+}
+
+int sbi_remote_hfence_vvma(const cpumask_t *cpu_mask, vaddr_t start,
+                           size_t size)
+{
+    ASSERT(sbi_rfence);
+
+    return sbi_rfence(SBI_EXT_RFENCE_REMOTE_HFENCE_VVMA, cpu_mask,
+                      start, size, 0);
+}
+
+int sbi_remote_hfence_vvma_asid(const cpumask_t *cpu_mask, vaddr_t start,
+                                size_t size, unsigned long asid)
+{
+    ASSERT(sbi_rfence);
+
+    return sbi_rfence(SBI_EXT_RFENCE_REMOTE_HFENCE_VVMA_ASID, cpu_mask,
+                      start, size, asid);
+}
+
 int sbi_hsm_hart_start(unsigned long hartid, unsigned long saddr,
                        unsigned long priv)
 {
