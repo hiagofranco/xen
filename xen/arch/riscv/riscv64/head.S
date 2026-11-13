@@ -14,11 +14,12 @@ FUNC(start)
         csrw    CSR_SIE, zero
 
         /*
-         * Disable FPU to detect illegal usage of
-         * floating point in kernel space
+         * Enable the FPU in HS-mode.  With the H extension, FP
+         * instructions in VS-mode require both mstatus.FS and
+         * vsstatus.FS to be non-zero.
          */
-        li      t0, SSTATUS_FS
-        csrc    CSR_SSTATUS, t0
+        li      t0, SSTATUS_FS_INITIAL
+        csrs    CSR_SSTATUS, t0
 
         /* Clear the BSS */
         la      t3, __bss_start
@@ -99,11 +100,12 @@ FUNC(secondary_start_sbi)
         csrw    CSR_SIE, zero
 
         /*
-         * Disable FPU to detect illegal usage of floating point in hypervisor
-         * space.
+         * Enable the FPU in HS-mode.  With the H extension, FP
+         * instructions in VS-mode require both mstatus.FS and
+         * vsstatus.FS to be non-zero.
          */
-        li      t0, SSTATUS_FS
-        csrc    CSR_SSTATUS, t0
+        li      t0, SSTATUS_FS_INITIAL
+        csrs    CSR_SSTATUS, t0
 
         /* Save hartid as it should be passed to smp_callin() later */
         mv      s0, a0
