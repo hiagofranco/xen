@@ -44,6 +44,9 @@ int domain_vsbi_uart_init(struct domain *d, struct vsbi_uart_init_info *info)
 
     spin_lock_init(&vsbi_uart->lock);
 
+    if ( d->console )
+        d->console->input_allowed = true;
+
     return 0;
 
 out:
@@ -81,4 +84,56 @@ void vsbi_print_char(char c)
         cons->idx = 0;
     }
     spin_unlock(&cons->lock);
+}
+
+int vsbi_uart_rx_char(struct domain *d, char c)
+{
+    struct vsbi_uart *u = &d->arch.vsbi_uart;
+    struct vsbi_uart_xen_backend *b = u->backend.xen;
+    unsigned long flags;
+    XENCONS_RING_IDX prod, cons;
+
+    if ( !b )
+        return -ENODEV;
+
+    spin_lock_irqsave(&u->lock, flags);
+    prod = b->in_prod;
+    cons = b->in_cons;
+
+    if ( (prod - cons) >= sizeof(b->in) )
+    {
+        spin_unlock_irqrestore(&u->lock, flags);
+        return -ENOSPC;
+    }
+
+    b->in[MASK_XENCONS_IDX(prod, b->in)] = c;
+    b->in_prod = prod + 1;
+    spin_unlock_irqrestore(&u->lock, flags);
+
+    return 0;
+}
+
+int vsbi_uart_get_char(struct domain *d)
+{
+    struct vsbi_uart *u = &d->arch.vsbi_uart;
+    struct vsbi_uart_xen_backend *b = u->backend.xen;
+    unsigned long flags;
+    XENCONS_RING_IDX prod, cons;
+    int c = -1;
+
+    if ( !b )
+        return -1;
+
+    spin_lock_irqsave(&u->lock, flags);
+    cons = b->in_cons;
+    prod = b->in_prod;
+
+    if ( cons != prod )
+    {
+        c = (unsigned char)b->in[MASK_XENCONS_IDX(cons, b->in)];
+        b->in_cons = cons + 1;
+    }
+    spin_unlock_irqrestore(&u->lock, flags);
+
+    return c;
 }

@@ -40,6 +40,9 @@
 #ifdef CONFIG_SBSA_VUART_CONSOLE
 #include <asm/vpl011.h>
 #endif
+#ifdef CONFIG_RISCV
+#include <asm/vsbi-uart.h>
+#endif
 
 /* Internal console flags. */
 enum {
@@ -654,7 +657,10 @@ static void __serial_rx(char c)
          */
         send_global_virq(VIRQ_CONSOLE);
     }
-#ifdef CONFIG_SBSA_VUART_CONSOLE
+#ifdef CONFIG_RISCV
+    else
+        rc = vsbi_uart_rx_char(d, c);
+#elif defined(CONFIG_SBSA_VUART_CONSOLE)
     else
         /* Deliver input to the emulated UART. */
         rc = vpl011_rx_char_xen(d, c);

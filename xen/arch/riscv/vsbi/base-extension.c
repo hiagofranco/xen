@@ -10,8 +10,8 @@
 #include <asm/vsbi.h>
 
 /* Xen-controlled SBI version reported to guests */
-#define XEN_SBI_VER_MAJOR 0
-#define XEN_SBI_VER_MINOR 2
+#define XEN_SBI_VER_MAJOR 2
+#define XEN_SBI_VER_MINOR 0
 
 static int vsbi_base_ecall_handler(unsigned long eid, unsigned long fid,
                                    struct cpu_user_regs *regs)

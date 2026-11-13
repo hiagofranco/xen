@@ -46,6 +46,8 @@ struct vsbi_uart_init_info {
 int domain_vsbi_uart_init(struct domain *d , struct vsbi_uart_init_info *info);
 void domain_vsbi_uart_deinit(struct domain *d);
 void vsbi_print_char(char c);
+int vsbi_uart_rx_char(struct domain *d, char c);
+int vsbi_uart_get_char(struct domain *d);
 
 #endif /* ASM__RISCV__VSBI_UART_H */
 

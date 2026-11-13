@@ -21,7 +21,7 @@ static int vsbi_legacy_ecall_handler(unsigned long eid, unsigned long fid,
         break;
 
     case SBI_EXT_0_1_CONSOLE_GETCHAR:
-        ret = SBI_ERR_NOT_SUPPORTED;
+        ret = vsbi_uart_get_char(current->domain);
         break;
 
     case SBI_EXT_0_1_SET_TIMER:
