@@ -30,6 +30,7 @@
 #include <asm/cpufeature.h>
 #include <asm/early_printk.h>
 #include <asm/fixmap.h>
+#include <asm/fpu.h>
 #include <asm/intc.h>
 #include <asm/ipi.h>
 #include <asm/page.h>
@@ -178,6 +179,8 @@ void __init noreturn start_xen(unsigned long bootcpu_id,
     init_IRQ();
 
     riscv_fill_hwcap();
+
+    fpu_init();
 
     init_csr_masks();
 

@@ -9,6 +9,7 @@ obj-$(CONFIG_EARLY_PRINTK) += early_printk.o
 obj-y += emulate.o
 obj-y += entry.o
 obj-y += extable.o
+obj-y += fpu.o
 obj-y += guestcopy.o
 obj-y += imsic.o
 obj-y += intc.o
