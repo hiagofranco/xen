@@ -17,6 +17,7 @@
 #include <asm/cpufeature.h>
 #include <asm/csr.h>
 #include <asm/current.h>
+#include <asm/fpu.h>
 #include <asm/gpr-num.h>
 #include <asm/imsic.h>
 #include <asm/intc.h>
@@ -265,6 +266,13 @@ static void vcpu_csr_init(struct vcpu *v)
      * the vCPU is descheduled can raise an interrupt to Xen.
      */
     v->arch.hie = BIT(IRQ_S_GEXT, UL);
+
+    /*
+     * Enable the guest FPU only if Xen can context-switch its state.
+     * Otherwise leave vsstatus.FS off, so guest FP instructions trap
+     * rather than sharing unswitched FP registers.
+     */
+    v->arch.vsstatus = cpu_has_fpu() ? SSTATUS_FS_INITIAL : 0;
 }
 
 static void schedule_tail(struct vcpu *prev);
@@ -589,6 +597,9 @@ static void ctxt_switch_from(struct vcpu *p)
 
     vintc_ctxt_switch_from(p);
 
+    if ( cpu_has_fpu() )
+        fpu_save(p);
+
     csrs_ctxt_switch_from(p);
 }
 
@@ -607,6 +618,9 @@ static void ctxt_switch_to(struct vcpu *n)
     vintc_ctxt_switch_to(n);
 
     vtimer_ctxt_switch_to(n);
+
+    if ( cpu_has_fpu() )
+        fpu_restore(n);
 
     p2m_ctxt_switch_to(n);
 }
