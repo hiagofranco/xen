@@ -71,5 +71,7 @@ void asm_offsets(void)
     OFFSET(VCPU_XEN_SAVED_CONTEXT_S11, struct vcpu, arch.xen_saved_context.s11);
     OFFSET(VCPU_XEN_SAVED_CONTEXT_SP, struct vcpu, arch.xen_saved_context.sp);
     OFFSET(VCPU_XEN_SAVED_CONTEXT_RA, struct vcpu, arch.xen_saved_context.ra);
+    OFFSET(VCPU_FPU_F, struct vcpu, arch.fpu.f);
+    OFFSET(VCPU_FPU_FCSR, struct vcpu, arch.fpu.fcsr);
     BLANK();
 }

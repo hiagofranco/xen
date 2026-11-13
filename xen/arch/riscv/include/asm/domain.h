@@ -82,6 +82,15 @@ struct arch_vcpu {
     register_t vstvec;
 
     /*
+     * Floating-point state, saved/restored across vCPU context switches.
+     * Only used when the D extension is available (see fpu_init()).
+     */
+    struct riscv_fpu_state {
+        uint64_t f[32];
+        uint64_t fcsr;
+    } fpu;
+
+    /*
      * VCPU interrupts
      *
      * We have a lockless approach for tracking pending VCPU interrupts
