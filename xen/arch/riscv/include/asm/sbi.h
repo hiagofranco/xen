@@ -33,6 +33,7 @@
 #define SBI_EXT_TIME                    0x54494D45
 #define SBI_EXT_HSM                     0x48534D
 #define SBI_EXT_IPI                     0x735049
+#define SBI_EXT_DBCN                    0x4442434E
 
 /* SBI function IDs for BASE extension */
 #define SBI_EXT_BASE_GET_SPEC_VERSION   0x0
@@ -57,6 +58,11 @@
 
 /* SBI function IDs for IPI extension */
 #define SBI_EXT_IPI_SEND_IPI            0x0
+
+/* SBI function IDs for DBCN extension */
+#define SBI_EXT_DBCN_CONSOLE_WRITE      0x0
+#define SBI_EXT_DBCN_CONSOLE_READ       0x1
+#define SBI_EXT_DBCN_CONSOLE_WRITE_BYTE 0x2
 
 #define SBI_SPEC_VERSION_MAJOR_MASK     0x7f000000
 #define SBI_SPEC_VERSION_MINOR_MASK     0x00ffffff

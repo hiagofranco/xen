@@ -116,6 +116,13 @@ unsigned long copy_to_guest_phys(struct domain *d, paddr_t gpa, void *buf,
                       COPY_to_guest | COPY_gpa);
 }
 
+unsigned long copy_from_guest_phys(struct domain *d, void *buf, paddr_t gpa,
+                                   unsigned long len)
+{
+    return copy_guest(buf, gpa, len, GPA_INFO(d),
+                      COPY_from_guest | COPY_gpa);
+}
+
 unsigned long read_guest(unsigned long guest_addr, bool read_insn,
                          struct trap_info *trap)
 {

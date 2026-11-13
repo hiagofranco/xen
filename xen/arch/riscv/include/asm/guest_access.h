@@ -26,6 +26,9 @@ unsigned long raw_clear_guest(void *to, unsigned int len);
 unsigned long copy_to_guest_phys(struct domain *d, paddr_t gpa, void *buf,
                                  unsigned long len);
 
+unsigned long copy_from_guest_phys(struct domain *d, void *buf, paddr_t gpa,
+                                   unsigned long len);
+
 /*
  * Read machine word from guest memory
  *

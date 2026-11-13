@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 
+#include <xen/console.h>
 #include <xen/errno.h>
 #include <xen/lib.h>
 #include <xen/mm.h>
@@ -59,4 +60,25 @@ void domain_vsbi_uart_deinit(struct domain *d)
         printk("%s: backed in a domain isn't supported\n", __func__);
     else
         XFREE(vsbi_uart->backend.xen);
+}
+
+void vsbi_print_char(char c)
+{
+    struct domain *currd = current->domain;
+    struct domain_console *cons = currd->console;
+
+    if ( !is_console_printable(c) )
+        return;
+
+    spin_lock(&cons->lock);
+    ASSERT(cons->idx < ARRAY_SIZE(cons->buf));
+    if ( c != '\n' )
+        cons->buf[cons->idx++] = c;
+    if ( (cons->idx == (ARRAY_SIZE(cons->buf) - 1)) || (c == '\n') )
+    {
+        cons->buf[cons->idx] = '\0';
+        guest_printk(currd, XENLOG_G_DEBUG "%s\n", cons->buf);
+        cons->idx = 0;
+    }
+    spin_unlock(&cons->lock);
 }
