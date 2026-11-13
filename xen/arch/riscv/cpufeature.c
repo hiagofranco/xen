@@ -182,8 +182,8 @@ static const struct riscv_isa_ext_entry __initconstrel riscv_isa_ext[] = {
     RISCV_ISA_EXT_ENTRY(i,              ANY),
     RISCV_ISA_EXT_ENTRY(m,              ANY),
     RISCV_ISA_EXT_ENTRY(a,              ANY),
-    RISCV_ISA_EXT_ENTRY(f,              NONE),
-    RISCV_ISA_EXT_ENTRY(d,              NONE),
+    RISCV_ISA_EXT_ENTRY(f,              ANY),
+    RISCV_ISA_EXT_ENTRY(d,              ANY),
     RISCV_ISA_EXT_ENTRY(q,              NONE),
     RISCV_ISA_EXT_ENTRY(c,              ANY),
     RISCV_ISA_EXT_ENTRY(v,              NONE),
@@ -613,6 +613,17 @@ static void __init compute_guest_isa(void)
         if ( (ext->guest_flags & RISCV_ISA_EXT_GUEST_XLEN) &&
              riscv_isa_extension_available(NULL, ext->id) )
             __set_bit(ext->id, guest_isa);
+    }
+
+    /*
+     * The FPU context is saved with fld/fsd, which need D and are only
+     * implemented on RV64. Do not expose F either if D is missing.
+     */
+    if ( !IS_ENABLED(CONFIG_RISCV_64) ||
+         !riscv_isa_extension_available(NULL, RISCV_ISA_EXT_d) )
+    {
+        __clear_bit(RISCV_ISA_EXT_f, guest_isa);
+        __clear_bit(RISCV_ISA_EXT_d, guest_isa);
     }
 
     /*
