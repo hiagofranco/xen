@@ -31,6 +31,7 @@ void trap_init(void)
 {
     unsigned long addr = (unsigned long)&handle_trap;
 
+    csr_write(CSR_SSCRATCH, 0);
     csr_write(CSR_STVEC, addr);
 }
 
