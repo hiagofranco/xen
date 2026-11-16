@@ -66,13 +66,6 @@ struct imsic_config {
      */
     unsigned int nr_eix;
 
-    /*
-     * Interrupt identity reserved in every h/w guest interrupt file for
-     * synchronizing with the injections into the file. It is never given to a
-     * guest.
-     */
-    unsigned int guest_sync_id;
-
     /* MSI */
     const struct imsic_msi *msi;
 
